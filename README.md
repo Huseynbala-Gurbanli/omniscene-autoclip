@@ -42,8 +42,14 @@ python3 autoclip.py ohnepixel kick.com/xqc                  # or start watching 
    - A video (YouTube / Twitch VOD link or a file on your Mac) → AI picks the best 3–12 moments.
 2. **Your clips** appear below with a score (🔥 Great / Good / OK), a title, **Download** and
    **Copy caption** (title + caption + hashtags).
-3. **Settings** → pick a caption style and layout (Full video / Facecam on top / Zoomed in) with a
-   live preview. More options and a setup check are tucked away below.
+3. **Format**: Vertical 9:16, Portrait 4:5, Square 1:1, Classic 4:3 or Horizontal 16:9 —
+   on the main screen, per faceless video, or per clip in the editor.
+4. **Edit** any clip: drag the start/end, fix caption words, change title/caption/hashtags,
+   style, layout, format, and add your logo → it re-makes the clip in place.
+5. **✨ Make a faceless video**: type a topic → AI writes the script (editable) → a Groq voice
+   reads it (Mac voice as fallback) → your recorded gameplay or any video plays behind it.
+6. **Settings** → caption style (Hype, Punchy, Karaoke, Bold, Pop, Box, Minimal — bounce/zoom
+   animations, emoji, 11 fonts), layout, logo, auto-clip timing, setup check and **Test AI**.
 
 Clips + a `.json` sidecar (score, title, hashtags, transcript) are saved to `clips/`.
 
@@ -56,7 +62,8 @@ Tuning constants at the top of `autoclip.py`: `SPIKE_X`, `MIN_MSGS`, `CLIP_LEN`,
 ## Note
 
 Only post clips of streams/videos you have permission to use (e.g. a streamer's clipping program).
-Face model: YuNet from OpenCV Zoo (MIT) — see `models/README.md`.
+Face model: YuNet from OpenCV Zoo (MIT) — see `models/README.md`. Fonts: OFL / Apache — see `fonts/README.md`.
+Groq voices (Orpheus) need a one-time terms acceptance in the Groq Playground.
 
 ## License
 

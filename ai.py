@@ -216,3 +216,86 @@ def _snap(words, s, e):
     s2 = min(starts, key=lambda x: abs(x - s)) if starts else s
     e2 = min(ends, key=lambda x: abs(x - e)) if ends else e
     return max(0.0, s2 - 0.25), e2 + 0.4
+
+
+# ---------------------------------------------------------------- faceless videos: script + voice
+
+TTS_MODEL = os.environ.get("GROQ_TTS_MODEL", "canopylabs/orpheus-v1-english")
+VOICES = ["troy", "austin", "daniel", "autumn", "diana", "hannah"]
+
+SCRIPT_SYSTEM = """You write scripts for faceless short-form videos (TikTok, YouTube Shorts, Reels)
+that get watched to the end. Hook in the first sentence, short punchy sentences, one clear story or
+list, a satisfying last line. Spoken words only: no stage directions, no emojis, no hashtags in the
+script. Reply as JSON only."""
+
+
+def write_script(topic, seconds=45):
+    words = int(seconds * 2.6)
+    user = f"""Topic: {topic}
+Write a voiceover script of about {words} words (~{seconds} seconds spoken).
+Return JSON: {{"title": "punchy title under 60 chars", "script": "the voiceover text",
+  "description": "1-2 sentence post caption", "hashtags": ["5-8 tags without #"]}}"""
+    j = _chat(SCRIPT_SYSTEM, user, max_tokens=1200)
+    meta = _clean_meta({**j, "score": 0})
+    return {"title": meta["title"], "script": str(j.get("script", "")).strip(),
+            "description": meta["description"], "hashtags": meta["hashtags"]}
+
+
+def _tts_chunks(text, limit=380):
+    parts, cur = [], ""
+    for s in re.split(r"(?<=[.!?])\s+", text.strip()):
+        while len(s) > limit:                               # very long sentence: split on commas/spaces
+            cut = s.rfind(",", 0, limit)
+            cut = cut if cut > 50 else s.rfind(" ", 0, limit)
+            parts.append(s[:cut + 1].strip())
+            s = s[cut + 1:].strip()
+        if len(cur) + len(s) + 1 > limit and cur:
+            parts.append(cur)
+            cur = s
+        else:
+            cur = (cur + " " + s).strip()
+    if cur:
+        parts.append(cur)
+    return [p for p in parts if p]
+
+
+def speak(text, out_wav, voice="troy", workdir=None):
+    """Voiceover -> WAV. Groq Orpheus first; macOS `say` as a fallback. Returns which engine was used."""
+    import shutil, tempfile
+    work = workdir or tempfile.mkdtemp(prefix="tts_")
+    os.makedirs(work, exist_ok=True)
+    pieces, err = [], ""
+    if has_key() and voice in VOICES:
+        try:
+            for i, chunk in enumerate(_tts_chunks(text)):
+                p = os.path.join(work, f"t{i:03d}.wav")
+                payload = {"model": TTS_MODEL, "voice": voice, "input": chunk, "response_format": "wav"}
+                r = subprocess.run(["curl", "-sS", "-w", "\n%{http_code}", "-o", p, f"{API}/audio/speech",
+                                    "-H", f"Authorization: Bearer {os.environ['GROQ_API_KEY']}",
+                                    "-H", "Content-Type: application/json", "-d", json.dumps(payload)],
+                                   capture_output=True, text=True)
+                code = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+                if code != "200":
+                    with open(p, errors="ignore") as f:
+                        err = f.read()[:300]
+                    raise RuntimeError(f"Groq voice HTTP {code}: {err}")
+                pieces.append(p)
+        except Exception as e:
+            err = str(e)
+            pieces = []
+    engine = "groq"
+    if not pieces:
+        if not shutil.which("say"):
+            raise RuntimeError(err or "No voice available (needs Groq voice access or a Mac)")
+        engine = "mac"
+        aiff = os.path.join(work, "say.aiff")
+        subprocess.run(["say", "-o", aiff, text], check=True)
+        pieces = [aiff]
+    lst = os.path.join(work, "list.txt")
+    with open(lst, "w") as f:
+        f.write("".join(f"file '{os.path.abspath(p)}'\n" for p in pieces))
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+                    "-ac", "1", "-ar", "44100", out_wav], check=True)
+    if not workdir:
+        shutil.rmtree(work, ignore_errors=True)
+    return engine, err

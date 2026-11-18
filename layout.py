@@ -13,9 +13,17 @@ import json, os, subprocess
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
-W, H = 1080, 1920
-TOP_H = 768                      # facecam panel height in split layout
-BOT_H = H - TOP_H
+W, H = 1080, 1920                # default canvas: vertical 9:16
+SIZES = {"9:16": (1080, 1920), "4:5": (1080, 1350), "1:1": (1080, 1080), "4:3": (1440, 1080), "16:9": (1920, 1080)}
+
+
+def canvas(aspect):
+    return SIZES.get(aspect, SIZES["9:16"])
+
+
+def can_split(cw, ch):
+    """Facecam-on-top only makes sense for tall formats."""
+    return ch >= cw * 1.15
 
 
 def probe_size(path):
@@ -123,60 +131,67 @@ def _sample_frames(path, samples):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def cam_box(face, sw, sh):
-    """Area around the face for the top panel (aspect 1080:768)."""
+def cam_box(face, sw, sh, panel_w=W, panel_h=768):
+    """Area around the face for the top panel (same aspect as the panel)."""
     x, y, w, h = face
     bw = min(sw, max(w * 2.6, 260))
-    bh = bw * TOP_H / W
+    bh = bw * panel_h / panel_w
     if bh > sh:
         bh = sh
-        bw = bh * W / TOP_H
+        bw = bh * panel_w / panel_h
     cx, cy = x + w / 2, y + h / 2 + h * 0.15
     bx = min(max(0, cx - bw / 2), sw - bw)
     by = min(max(0, cy - bh / 2), sh - bh)
     return int(bx) // 2 * 2, int(by) // 2 * 2, int(bw) // 2 * 2, int(bh) // 2 * 2
 
 
-def build_filter(layout, sw, sh, face=None):
-    """ffmpeg filter_complex from [0:v] to [base] (1080x1920). Returns (filter, layout_used)."""
+def build_filter(layout, sw, sh, face=None, size=(W, H)):
+    """ffmpeg filter_complex from [0:v] to [base] at `size`. Returns (filter, layout_used)."""
+    cw, ch = size
     pre = "[0:v]setpts=PTS-STARTPTS"
-    if layout == "split" and face:
-        cx, cy, cw, ch = cam_box(face, sw, sh)
-        gw = min(sw, int(sh * W / BOT_H)) // 2 * 2         # gameplay crop with the bottom panel's aspect
+    if layout == "split" and face and can_split(cw, ch):
+        top_h = int(ch * 0.4) // 2 * 2
+        bot_h = ch - top_h
+        bx, by, bw, bh = cam_box(face, sw, sh, cw, top_h)
+        gw = min(sw, int(sh * cw / bot_h)) // 2 * 2         # gameplay crop with the bottom panel's aspect
         gx = (sw - gw) // 2
         return (f"{pre},split[a][b];"
-                f"[a]crop={cw}:{ch}:{cx}:{cy},scale={W}:{TOP_H}:force_original_aspect_ratio=increase,"
-                f"crop={W}:{TOP_H}[top];"
-                f"[b]crop={gw}:{sh}:{gx}:0,scale={W}:{BOT_H}:force_original_aspect_ratio=increase,"
-                f"crop={W}:{BOT_H}[bot];"
+                f"[a]crop={bw}:{bh}:{bx}:{by},scale={cw}:{top_h}:force_original_aspect_ratio=increase,"
+                f"crop={cw}:{top_h}[top];"
+                f"[b]crop={gw}:{sh}:{gx}:0,scale={cw}:{bot_h}:force_original_aspect_ratio=increase,"
+                f"crop={cw}:{bot_h}[bot];"
                 f"[top][bot]vstack=inputs=2[base]"), "split"
     if layout == "fill":
-        return (f"{pre},scale=-2:{H},crop={W}:{H}[base]"), "fill"
+        return (f"{pre},scale={cw}:{ch}:force_original_aspect_ratio=increase,crop={cw}:{ch}[base]"), "fill"
     return (f"{pre},split[a][b];"
-            f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=20:5[bg];"
-            f"[b]scale={W}:-2[fg];"
+            f"[a]scale={cw}:{ch}:force_original_aspect_ratio=increase,crop={cw}:{ch},boxblur=20:5[bg];"
+            f"[b]scale={cw}:{ch}:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2[base]"), "blur"
 
 
-def compose_preview(frame, layout, face=None):
-    """PIL version of build_filter for the caption-studio preview."""
+def compose_preview(frame, layout, face=None, size=(W, H)):
+    """PIL version of build_filter for the settings preview."""
     from PIL import Image, ImageFilter
+    cw, ch = size
     sw, sh = frame.size
-    if layout == "split" and face:
-        cx, cy, cw, ch = cam_box(face, sw, sh)
-        top = _cover(frame.crop((cx, cy, cx + cw, cy + ch)), W, TOP_H)
-        gw = min(sw, int(sh * W / BOT_H))
+    if layout == "split" and face and can_split(cw, ch):
+        top_h = int(ch * 0.4) // 2 * 2
+        bot_h = ch - top_h
+        bx, by, bw, bh = cam_box(face, sw, sh, cw, top_h)
+        top = _cover(frame.crop((bx, by, bx + bw, by + bh)), cw, top_h)
+        gw = min(sw, int(sh * cw / bot_h))
         gx = (sw - gw) // 2
-        bot = _cover(frame.crop((gx, 0, gx + gw, sh)), W, BOT_H)
-        out = Image.new("RGB", (W, H))
+        bot = _cover(frame.crop((gx, 0, gx + gw, sh)), cw, bot_h)
+        out = Image.new("RGB", (cw, ch))
         out.paste(top, (0, 0))
-        out.paste(bot, (0, TOP_H))
+        out.paste(bot, (0, top_h))
         return out
     if layout == "fill":
-        return _cover(frame, W, H)
-    bg = _cover(frame, W, H).filter(ImageFilter.GaussianBlur(28))
-    fg = frame.resize((W, int(sh * W / sw)))
-    bg.paste(fg, (0, (H - fg.height) // 2))
+        return _cover(frame, cw, ch)
+    bg = _cover(frame, cw, ch).filter(ImageFilter.GaussianBlur(28))
+    k = min(cw / sw, ch / sh)
+    fg = frame.resize((int(sw * k), int(sh * k)))
+    bg.paste(fg, ((cw - fg.width) // 2, (ch - fg.height) // 2))
     return bg
 
 

@@ -565,7 +565,8 @@ def render_clip(name):
             sc["face"] = face
         if st["layout"] == "split" and not face:
             log(f"{name}: no facecam found -> full video layout")
-        vf, used = layout.build_filter(st["layout"], sw, sh, face or None)
+        cw, ch = layout.canvas(st["aspect"])
+        vf, used = layout.build_filter(st["layout"], sw, sh, face or None, (cw, ch))
         inputs, idx, last = ["-ss", f"{a:.3f}", "-t", f"{dur:.3f}", "-i", source], 1, "base"
         clip_words = [{"word": w["word"], "start": w["start"] - a, "end": w["end"] - a}
                       for w in sc.get("words", []) if w["start"] >= a - 0.05 and w["end"] <= b + 0.05]
@@ -575,7 +576,7 @@ def render_clip(name):
             vf += f";[{last}][{idx}:v]overlay=0:0:eof_action=repeat[cap]"
             last, idx = "cap", idx + 1
         if st["logo"] and os.path.exists(LOGO):
-            lw = int(1080 * st["logo_size"] / 100) // 2 * 2
+            lw = int(min(cw, ch) * st["logo_size"] / 100) // 2 * 2
             m = 48
             pos = {"tl": (f"{m}", f"{m + 40}"), "tr": (f"W-w-{m}", f"{m + 40}"),
                    "bl": (f"{m}", f"H-h-{m + 120}"), "br": (f"W-w-{m}", f"H-h-{m + 120}")}[st["logo_pos"]]
@@ -589,15 +590,17 @@ def render_clip(name):
                         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", tmp], check=True)
         os.replace(tmp, final)
         text = " ".join(w["word"].strip() for w in clip_words)
-        sc.update(layout=used, length=round(dur, 1), size=os.path.getsize(final), caption=text[:140],
+        sc.update(layout=used, aspect=st["aspect"], length=round(dur, 1), size=os.path.getsize(final), caption=text[:140],
                   transcript=text[:4000], version=sc.get("version", 0) + 1)
         write_sidecar(name, sc)
         info = {k: v for k, v in sc.items() if k not in ("words", "style", "face")}
         set_clip(name, status="ready", **info)
+        CTX["last_render_ok"] = True
         log(f"✅ saved {final}" + (f"  · score {sc['score']} · {sc.get('title', '')}" if sc.get("score") is not None else ""))
     except Exception as e:
         set_clip(name, status="ready" if os.path.exists(final) else "failed")
         log(f"render failed: {e}")
+        return False
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -680,7 +683,7 @@ PRESETS = {
     "minimal": {**_P, "font": "Rounded", "size": 70, "uppercase": False, "words": 5, "color": "#FFFFFF",
                 "highlight": "#FFFFFF", "outline": 0, "shadow": True},
 }
-DEFAULT_STYLE = {"enabled": True, "preset": "hype", "position": 75, "layout": "blur",
+DEFAULT_STYLE = {"enabled": True, "preset": "hype", "position": 75, "layout": "blur", "aspect": "9:16",
                  "logo": False, "logo_pos": "tr", "logo_size": 18, **PRESETS["hype"]}
 _font_cache = {}
 
@@ -798,6 +801,8 @@ def clean_style(st):
             out[k] = DEFAULT_STYLE[k]
     if out["layout"] not in ("blur", "split", "fill"):
         out["layout"] = "blur"
+    if out["aspect"] not in layout.SIZES:
+        out["aspect"] = "9:16"
     if out["animation"] not in ("none", "bounce", "zoom"):
         out["animation"] = "none"
     if out["logo_pos"] not in ("tl", "tr", "bl", "br"):
@@ -813,7 +818,8 @@ def draw_caption(texts, active, st, active_scale=1.0, scale_all=1.0, emoji=""):
     """One caption frame. active = index of the spoken word (-1 none); active_scale grows that
     word (pop / bounce); scale_all zooms the whole caption (zoom-in animation)."""
     from PIL import Image, ImageDraw, ImageFilter
-    W, H, maxw = 1080, 1920, 960
+    W, H = layout.canvas(st["aspect"])
+    maxw = int(W * 0.89)
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     if not texts:
         return img
@@ -822,7 +828,7 @@ def draw_caption(texts, active, st, active_scale=1.0, scale_all=1.0, emoji=""):
     probe = ImageDraw.Draw(img)
     grow = active_scale * (1.18 if st["pop"] else 1.0)
 
-    def layout(sz):
+    def fit(sz):
         base = load_font(st["font"], sz)
         big = load_font(st["font"], int(sz * grow)) if grow != 1.0 else base
         fonts = [big if i == active else base for i in range(len(texts))]
@@ -843,7 +849,7 @@ def draw_caption(texts, active, st, active_scale=1.0, scale_all=1.0, emoji=""):
 
     sz = size
     while True:
-        base, fonts, widths, space = layout(sz)
+        base, fonts, widths, space = fit(sz)
         lines = split_lines(widths, space)
         too_wide = any(sum(widths[i] for i in ln) + space * (len(ln) - 1) > maxw for ln in lines)
         if not too_wide or sz <= 40:
@@ -922,7 +928,7 @@ def render_captions(words, outdir, style=None):
     st = clean_style(style or STATE.get("caption_style"))
     os.makedirs(outdir, exist_ok=True)
     blank = os.path.abspath(os.path.join(outdir, "blank.png"))
-    Image.new("RGBA", (1080, 1920), (0, 0, 0, 0)).save(blank)
+    Image.new("RGBA", layout.canvas(st["aspect"]), (0, 0, 0, 0)).save(blank)
     anim = st["animation"]
     karaoke = st["highlight"].lower() != st["color"].lower() or st["pop"] or anim == "bounce"
     segs = []   # (start, end, words_in_chunk, active, first_of_chunk, emoji)
@@ -1021,7 +1027,7 @@ def caption_preview(style, channel=None):
             dd.rectangle((1500, 40, 1880, 330), fill=(70, 74, 84))
             dd.ellipse((1640, 110, 1740, 230), fill=(150, 125, 110))
             face = (1640, 110, 100, 120)
-    canvas = layout.compose_preview(frame, st["layout"], face)
+    canvas = layout.compose_preview(frame, st["layout"], face, layout.canvas(st["aspect"]))
     texts = [w["word"] for w in SAMPLE[:st["words"]]]
     act = min(1, len(texts) - 1) if (st["highlight"].lower() != st["color"].lower() or st["pop"]) else -1
     emo = pick_emoji(" ".join(texts)) if st["emoji"] else ""
@@ -1029,14 +1035,16 @@ def caption_preview(style, channel=None):
     canvas = Image.alpha_composite(canvas.convert("RGBA"), draw_caption(texts, act, st, a_s, 1.0, emo))
     if st["logo"] and os.path.exists(LOGO):
         lg = Image.open(LOGO).convert("RGBA")
-        lw = int(1080 * st["logo_size"] / 100)
+        cw, ch = layout.canvas(st["aspect"])
+        lw = int(min(cw, ch) * st["logo_size"] / 100)
         lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
         m = 48
-        x = m if st["logo_pos"] in ("tl", "bl") else 1080 - lw - m
-        y = m + 40 if st["logo_pos"] in ("tl", "tr") else 1920 - lg.height - m - 120
+        x = m if st["logo_pos"] in ("tl", "bl") else cw - lw - m
+        y = m + 40 if st["logo_pos"] in ("tl", "tr") else ch - lg.height - m - 120
         canvas.alpha_composite(lg, (x, y))
     buf = io.BytesIO()
-    canvas.convert("RGB").resize((540, 960)).save(buf, "JPEG", quality=85)
+    k = 960 / max(canvas.size)
+    canvas.convert("RGB").resize((int(canvas.width * k), int(canvas.height * k))).save(buf, "JPEG", quality=85)
     return buf.getvalue()
 
 
@@ -1349,6 +1357,114 @@ def start_any(raw, count=5, min_len=20, max_len=60):
     return "live", ch.key if ch else None, err
 
 
+# ---------------------------------------------------------------- faceless video maker
+
+def recordings():
+    """Gameplay the user already has: recorded streams (.ts) and downloaded videos, biggest first."""
+    out = CTX["out"]
+    files = [os.path.join(out, f) for f in os.listdir(out) if f.endswith(".ts")]
+    files = [f for f in files if os.path.getsize(f) > 20_000_000]
+    return sorted(files, key=os.path.getsize, reverse=True)
+
+
+def run_story(job):
+    out = CTX["out"]
+    work = os.path.join(out, f".story_{job['id']}")
+    os.makedirs(work, exist_ok=True)
+    try:
+        if not ai.has_key():
+            raise RuntimeError("needs your Groq key (Settings)")
+        # 1) voice
+        set_job(job, stage="making voice", progress=0.1)
+        voice = os.path.join(work, "voice.wav")
+        engine, err = ai.speak(job["script"], voice, job.get("voice", "troy"), os.path.join(work, "tts"))
+        if engine == "mac" and job.get("voice") != "mac":
+            log("Groq voice unavailable" + (f" ({err[:120]})" if err else "") +
+                " - used the Mac voice. To enable Groq voices, open console.groq.com/playground once, "
+                "pick canopylabs/orpheus-v1-english and accept its terms.")
+        vdur = media_duration(voice)
+        if vdur < 2:
+            raise RuntimeError("the voiceover came out empty")
+        # 2) word timings from the actual voice (perfect caption sync)
+        set_job(job, stage="timing captions", progress=0.35)
+        words = ai.transcribe(voice)
+        # 3) background
+        set_job(job, stage="getting background", progress=0.5)
+        bg = job.get("background") or ""
+        if bg and not os.path.isfile(os.path.expanduser(bg)):
+            if not shutil.which("yt-dlp"):
+                raise RuntimeError("yt-dlp missing")
+            r = subprocess.run(["yt-dlp", "--no-playlist", "-f", "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/b",
+                                "-o", os.path.join(work, "bg.%(ext)s"), "--print", "after_move:%(filepath)s",
+                                "--no-simulate", bg], capture_output=True, text=True)
+            lines = [l for l in r.stdout.splitlines() if l.strip()]
+            bg = lines[-1] if r.returncode == 0 and lines else ""
+            if not bg or not os.path.exists(bg):
+                raise RuntimeError("couldn't download the background video")
+        elif bg:
+            bg = os.path.expanduser(bg)
+        else:
+            recs = recordings()
+            if not recs:
+                raise RuntimeError("no gameplay yet: watch a stream for a few minutes first, or paste a video link")
+            bg = recs[0]
+        bdur = media_duration(bg)
+        need = vdur + 0.6
+        import random
+        off = random.uniform(0, max(0.0, bdur - need - 5)) if bdur > need + 10 else 0.0
+        # 4) source = background (muted) + voice, then the normal clip pipeline (captions, layout, logo, editor)
+        set_job(job, stage="making video", progress=0.65)
+        slug = re.sub(r"[^\w-]", "", re.sub(r"\s+", "-", job["title"].lower()))[:24] or "story"
+        name = f"story-{slug}_{datetime.now():%Y%m%d_%H%M%S}.mp4"
+        source = os.path.join(src_dir(out), name)
+        loop = ["-stream_loop", "-1"] if bdur and bdur < need else []
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *loop, "-ss", f"{off:.2f}", "-i", bg, "-i", voice,
+                        "-map", "0:v:0", "-map", "1:a:0", "-t", f"{need:.2f}", "-c:v", "libx264",
+                        "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", source], check=True)
+        st = clean_style(STATE.get("caption_style"))
+        if job.get("layout"):
+            st["layout"] = job["layout"]
+        if job.get("aspect") in layout.SIZES:
+            st["aspect"] = job["aspect"]
+        set_clip(name, status="rendering", reason="story", created=time.time(), channel="story",
+                 title=job["title"])
+        write_sidecar(name, {"reason": "story", "peak": 0, "channel": "story", "created": time.time(),
+                             "source": name, "trim": [0.0, round(need, 2)], "src_len": round(need, 2),
+                             "words": words, "style": st, "captions": True, "note": "",
+                             "title": job["title"], "description": job.get("description", ""),
+                             "hashtags": job.get("hashtags", []), "voice": engine})
+        with RENDER_SLOTS:
+            ok = render_clip(name)
+        if ok is False:
+            raise RuntimeError("rendering failed (see Activity log)")
+        job["clips"].append(name)
+        set_job(job, stage="done", progress=1)
+        log(f"🎬 faceless video ready: {job['title']}")
+    except Exception as e:
+        set_job(job, stage="failed", error=str(e)[:200])
+        log(f"faceless video failed: {e}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def start_story(body):
+    script = str(body.get("script", "")).strip()
+    if len(script.split()) < 8:
+        return None, "Write or generate a script first"
+    job = {"id": f"{int(time.time() * 1000) % 10**9}", "kind": "story", "url": "", "stage": "queued",
+           "title": str(body.get("title") or "Faceless video")[:90], "script": script[:6000],
+           "voice": body.get("voice", "troy"), "background": str(body.get("background", "")).strip(),
+           "layout": body.get("layout") if body.get("layout") in ("blur", "fill", "split") else "fill",
+           "aspect": body.get("aspect") if body.get("aspect") in layout.SIZES else None,
+           "description": str(body.get("description", ""))[:400],
+           "hashtags": [re.sub(r"[^\w]", "", t) for t in body.get("hashtags", []) if t][:8],
+           "progress": 0, "clips": [], "error": "", "created": time.time()}
+    with STATE_LOCK:
+        STATE["jobs"].insert(0, job)
+    threading.Thread(target=run_story, args=(job,), daemon=True).start()
+    return job, None
+
+
 def start_vod(url, count=6, min_len=20, max_len=60):
     url = (url or "").strip()
     if not url:
@@ -1395,6 +1511,8 @@ def make_handler(out_dir):
                 if time.time() - CTX.get("setup_at", 0) > 5:
                     CTX["setup_at"] = time.time()
                     refresh_setup()
+                    STATE["has_gameplay"] = bool(recordings())
+                    STATE["voices"] = ai.VOICES + (["mac"] if shutil.which("say") else [])
                 with STATE_LOCK:
                     for v in STATE["channels"].values():
                         if os.path.exists(v["recording"]):
@@ -1487,6 +1605,19 @@ def make_handler(out_dir):
             if path == "/api/setup/install":
                 threading.Thread(target=install_pkg, args=(str(body.get("pkg", "")),), daemon=True).start()
                 return self._send(200, {"ok": True})
+            if path == "/api/story/script":
+                if not ai.has_key():
+                    return self._send(400, {"error": "Add your Groq key in Settings first"})
+                topic = str(body.get("topic", "")).strip()
+                if len(topic) < 3:
+                    return self._send(400, {"error": "Type a topic first"})
+                try:
+                    return self._send(200, ai.write_script(topic, int(body.get("seconds", 45))))
+                except Exception as e:
+                    return self._send(500, {"error": "Couldn't write the script: " + str(e)[:160]})
+            if path == "/api/story/make":
+                job, err = start_story(body)
+                return self._send(400 if err else 200, {"error": err} if err else {"ok": True, "id": job["id"]})
             if path == "/api/clips/edit":
                 n = str(body.get("name", ""))
                 if not re.fullmatch(r"[\w-]+\.mp4", n) or not os.path.exists(os.path.join(out_dir, n)):

@@ -174,6 +174,28 @@
   .ed .foot .btn{flex:1;padding:13px}
   .warnbox{font-size:14px;color:var(--warn);background:rgba(255,176,32,.08);border:1px solid rgba(255,176,32,.3);border-radius:10px;padding:10px 12px}
 
+  /* format picker */
+  .fmtseg button{display:inline-flex;align-items:center;gap:7px}
+  .fmtseg i{display:inline-block;border:2px solid currentColor;border-radius:3px}
+  .fmtrow{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap;color:var(--muted);font-size:14px}
+
+  /* faceless maker */
+  .mk{position:fixed;left:50%;top:50%;transform:translate(-50%,-48%) scale(.985);width:min(720px,94vw);max-height:92vh;overflow-y:auto;background:var(--bg);
+    border:1px solid var(--line2);border-radius:18px;z-index:22;padding:28px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;display:grid;gap:16px}
+  .mk.open{opacity:1;pointer-events:auto;transform:translate(-50%,-50%)}
+  .mk h2{font:800 28px var(--display);letter-spacing:-.025em}
+  .mk .lead{color:var(--muted);margin-top:-10px}
+  .mk .r{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .mk input[type=text],.mk textarea{width:100%;background:var(--panel);border:1px solid var(--line2);color:var(--text);border-radius:10px;padding:11px 12px;font:15px var(--display)}
+  .mk input[type=text]:focus,.mk textarea:focus{outline:none;border-color:var(--go)}
+  .mk textarea{min-height:170px;resize:vertical;line-height:1.5}
+  .mk .cnt{font-size:13px;color:var(--muted)}
+  .mk .opt2{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line2);border-radius:12px;cursor:pointer}
+  .mk .opt2:has(input:checked){border-color:var(--go);background:var(--panel)}
+  .mk .opt2 input{accent-color:var(--go)}
+  .ghost-cta{display:inline-flex;align-items:center;gap:8px;font-weight:600;color:var(--text);border:1px solid var(--line2);border-radius:999px;padding:6px 14px}
+  .ghost-cta:hover{border-color:var(--go)}
+
   /* settings drawer */
   .scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:20}
   .scrim.open{opacity:1;pointer-events:auto}
@@ -248,7 +270,7 @@
 
   <section class="hero">
     <h1>Paste a link. <em>Get clips.</em></h1>
-    <p>Live stream: autoclip watches it and clips the moments chat goes wild. Video: it picks the best moments for you. Every clip comes out vertical, with captions and a title.</p>
+    <p>Live stream: autoclip watches it and clips the moments chat goes wild. Video: it picks the best moments for you. Every clip comes out in the format you pick, with captions and a title.</p>
     <form class="bar" id="startForm" autocomplete="off">
       <input id="link" placeholder="Twitch, Kick or YouTube link — live stream or video" spellcheck="false" aria-label="Link">
       <button class="btn solid" type="submit" id="startBtn">Start</button>
@@ -258,10 +280,13 @@
       <button data-ex="twitch.tv/ohnepixel">twitch.tv/ohnepixel</button>
       <button data-ex="kick.com/adinross">kick.com/adinross</button>
       <button data-ex="youtube.com/@IShowSpeed">youtube.com/@IShowSpeed</button>
+      <button class="ghost-cta" id="openMk" type="button">✨ Make a faceless video</button>
       <span class="opts">From a video, make
         <select id="count" aria-label="Number of clips"><option>3</option><option selected>5</option><option>8</option><option>12</option></select> clips</span>
     </div>
   </section>
+
+  <div class="fmtrow" style="margin-top:-18px;margin-bottom:26px">Format for new clips <div class="seg pick fmtseg" id="heroFmt"></div></div>
 
   <section class="setup hidden" id="setupKey">
     <h3>Turn on captions and AI titles</h3>
@@ -309,6 +334,9 @@
   <div class="set">
     <h2>Settings</h2>
     <p class="lead">Changes apply to new clips and save automatically.</p>
+
+    <h3>Video format</h3>
+    <div class="seg pick fmtseg" id="setFmt"></div>
 
     <h3>Auto-clips</h3>
     <div class="opt"><span class="lbl">How long each auto-clip is</span>
@@ -398,11 +426,34 @@
     <label class="fld">Caption for the post<textarea id="edDesc" rows="3"></textarea></label>
     <label class="fld">Hashtags<input id="edTags" placeholder="gta6 gaming shorts"></label>
     <div class="fld">Caption style<select id="edStyle"></select></div>
+    <div class="fld">Format<div class="seg pick fmtseg" id="edFmt"></div></div>
     <div class="fld">Layout<div class="seg pick" id="edLayout"><button data-l="blur">Full video</button><button data-l="split">Facecam on top</button><button data-l="fill">Zoomed in</button></div></div>
     <label class="tg" id="edLogoRow">Add my logo<input type="checkbox" id="edLogo"></label>
     <p class="sub" id="edLogoHint" style="font-size:13px;color:var(--muted)">Upload your logo in Settings first.</p>
     <div class="foot"><button class="btn" id="edCancel">Cancel</button><button class="btn solid" id="edSave">Save & re-make clip</button></div>
   </div>
+</section>
+
+<section class="mk" id="mk" aria-label="Make a faceless video">
+  <button class="x" id="mkClose" aria-label="Close">×</button>
+  <h2>Make a faceless video</h2>
+  <p class="lead">AI writes the script, a voice reads it, gameplay plays behind it, captions included.</p>
+  <div class="r"><input type="text" id="mkTopic" placeholder="Topic, e.g. 5 hidden GTA 6 secrets nobody noticed" style="flex:1;min-width:240px">
+    <select id="mkSecs" aria-label="Length"><option value="30">30s</option><option value="45" selected>45s</option><option value="60">60s</option></select>
+    <button class="btn solid" id="mkWrite">Write script</button></div>
+  <input type="text" id="mkTitle" placeholder="Title">
+  <div><textarea id="mkScript" placeholder="Your script appears here. You can also write or paste your own."></textarea>
+    <div class="cnt" id="mkCnt">0 words</div></div>
+  <div class="r"><span style="color:var(--muted);font-size:14px;min-width:70px">Voice</span><select id="mkVoice"></select>
+    <span style="color:var(--muted);font-size:14px;margin-left:12px">Look</span>
+    <div class="seg pick" id="mkLayout"><button data-l="fill" class="sel">Zoomed in</button><button data-l="blur">Full video</button></div></div>
+  <div class="r"><span style="color:var(--muted);font-size:14px;min-width:70px">Format</span><div class="seg pick fmtseg" id="mkFmt"></div></div>
+  <div style="display:grid;gap:8px">
+    <label class="opt2"><input type="radio" name="mkbg" value="rec" checked><span><b>Gameplay from my streams</b><br><span class="cnt" id="mkRecNote">Uses footage autoclip recorded</span></span></label>
+    <label class="opt2"><input type="radio" name="mkbg" value="link"><span style="flex:1"><b>A video link or file</b>
+      <input type="text" id="mkBg" placeholder="YouTube link or /path/to/video.mp4" style="margin-top:8px"></span></label>
+  </div>
+  <button class="btn solid" id="mkGo" style="padding:14px;font-size:17px;font-weight:700">Make video</button>
 </section>
 
 <div class="toast" id="toast"></div>
@@ -566,11 +617,15 @@ function spark(cv, b){
 function jobText(j){
   const p = Math.round((j.progress || 0) * 100);
   if (j.stage === "failed") return ["bad", "Didn't work: " + j.error];
-  if (j.stage === "done") return ["ok", `Done · ${j.clips.length} clips ready below`];
+  if (j.stage === "done") return ["ok", j.kind === "story" ? "Done · your video is ready below" : `Done · ${j.clips.length} clips ready below`];
   if (j.stage === "downloading") return ["", `Downloading the video… ${p}%`];
   if (j.stage === "transcribing") return ["", `Listening to the video… ${p}%`];
   if (j.stage === "finding moments") return ["", `Picking the best moments… ${p}%`];
   if ((j.stage || "").startsWith("rendering")) return ["", "Making clip " + j.stage.replace("rendering ", "").replace("/", " of ") + "…"];
+  if (j.stage === "making voice") return ["", "Recording the voiceover…"];
+  if (j.stage === "timing captions") return ["", "Syncing captions to the voice…"];
+  if (j.stage === "getting background") return ["", "Getting background gameplay…"];
+  if (j.stage === "making video") return ["", "Putting the video together…"];
   return ["", "Starting…"];
 }
 function renderJobs(){
@@ -589,7 +644,7 @@ const STEP = {cutting:"Cutting the clip…", rendering:"Making your edit…", tr
 const label = sc => sc >= 80 ? ["great", "🔥 " + sc + " · Great"] : sc >= 60 ? ["good", sc + " · Good"] : ["ok", sc + " · OK"];
 const postText = c => [c.title, c.description, (c.hashtags || []).map(t => "#" + t).join(" ")].filter(Boolean).join("\n\n");
 function source(c){
-  const ch = c.channel || ""; if (ch.startsWith("vod:")) return "From a video";
+  const ch = c.channel || ""; if (ch.startsWith("vod:")) return "From a video"; if (ch === "story") return "Faceless video";
   const live = (S.channels || {})[ch]; return live ? (live.label || ch) : ch.replace(/^(kick|youtube):/, "");
 }
 function renderClips(){
@@ -601,13 +656,14 @@ function renderClips(){
   const grid = $("grid");
   [...grid.children].forEach(el => { if (!all.some(c => "c-" + c.name === el.id)) el.remove(); });
   clips.forEach((c, i) => {
-    const key = [c.status, c.score, c.title, c.note, c.version].join("|");
+    const key = [c.status, c.score, c.title, c.note, c.version, c.aspect].join("|");
     let el = document.getElementById("c-" + c.name);
     if (!el || cache[c.name] !== key){
       cache[c.name] = key;
       const ok = c.status === "ready", bad = c.status === "failed";
       const [bc, bt] = c.score != null ? label(c.score) : [null, null];
-      const html = `<div class="frame">
+      const asp = (c.aspect || "9:16").replace(":", "/");
+      const html = `<div class="frame" style="aspect-ratio:${asp}">
           ${ok ? `<video src="/clips/${c.name}?v=${c.version || 0}" preload="metadata" controls playsinline></video>`
                : `<div class="busy ${bad ? "bad" : ""}">${bad ? "This clip failed" : `<div class="spin"></div>${STEP[c.status] || "Working…"}`}</div>`}
           ${bc ? `<span class="badge ${bc}">${bt}</span>` : ""}</div>
@@ -666,6 +722,8 @@ function initSettings(){
     rd.onload = async () => { try { await api("/api/logo", {data: rd.result}); S.has_logo = true; set({logo: true}); toast("Logo saved"); syncLogo(); } catch(err){ toast(err.message); } };
     rd.readAsDataURL(f); };
   $("logoDel").onclick = async () => { await api("/api/logo", {remove: true}); S.has_logo = false; set({logo: false}); syncLogo(); };
+  fmtSeg($("heroFmt"), style.aspect || "9:16", setFormat);
+  fmtSeg($("setFmt"), style.aspect || "9:16", setFormat);
   sync();
 }
 function set(patch, custom){ style = {...style, ...patch}; if (custom) style.preset = "custom"; sync(); clearTimeout(pvT); pvT = setTimeout(preview, 160);
@@ -673,6 +731,9 @@ function set(patch, custom){ style = {...style, ...patch}; if (custom) style.pre
 function sync(){
   document.querySelectorAll("#styles .tile").forEach(b => b.classList.toggle("sel", style.enabled ? b.dataset.p === style.preset : b.dataset.p === "off"));
   document.querySelectorAll("#layouts .tile").forEach(b => b.classList.toggle("sel", b.dataset.l === style.layout));
+  ["heroFmt", "setFmt"].forEach(id => $(id).querySelectorAll("button").forEach(b => b.classList.toggle("sel", b.dataset.f === (style.aspect || "9:16"))));
+  const [fw, fh] = (style.aspect || "9:16").split(":").map(Number); document.querySelector(".phone").style.aspectRatio = fw + "/" + fh;
+  document.querySelector(".phone").style.width = fw >= fh ? "280px" : "250px";
   $("font").value = style.font; $("words").value = style.words; $("size").value = style.size; $("pos").value = style.position; $("outline").value = style.outline;
   $("upper").checked = style.uppercase; $("pop").checked = style.pop; $("box").checked = style.box; $("shadow").checked = style.shadow;
   $("emoji").checked = !!style.emoji; $("anim").value = style.animation || "none";
@@ -695,8 +756,8 @@ function preview(){
 }
 function openSet(){ if (!style) return; $("drawer").classList.add("open"); $("scrim").classList.add("open"); preview(); }
 function closeSet(){ $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); }
-$("openSet").onclick = openSet; $("closeSet").onclick = closeSet; $("scrim").onclick = () => { closeSet(); if (E) closeEditor(); };
-addEventListener("keydown", e => { if (e.key === "Escape"){ closeSet(); if (E) closeEditor(); } });
+$("openSet").onclick = openSet; $("closeSet").onclick = closeSet; $("scrim").onclick = () => { closeSet(); if (E) closeEditor(); closeMk(); };
+addEventListener("keydown", e => { if (e.key === "Escape"){ closeSet(); if (E) closeEditor(); closeMk(); } });
 
 function renderCfg(){
   const cfg = S.clip_cfg || {};
@@ -734,6 +795,7 @@ async function openEditor(name){
   $("edStyle").innerHTML = Object.keys(S.presets).map(k => `<option value="${k}">${k[0].toUpperCase() + k.slice(1)}</option>`).join("") + `<option value="custom">Custom (from Settings)</option><option value="off">No captions</option>`;
   $("edStyle").value = E.style.enabled === false ? "off" : (S.presets[E.style.preset] ? E.style.preset : "custom");
   $("edLogo").checked = !!E.style.logo; $("edLogo").disabled = !S.has_logo; $("edLogoHint").classList.toggle("hidden", !!S.has_logo);
+  fmtSeg($("edFmt"), E.style.aspect || "9:16", v => { E.style.aspect = v; });
   syncLayout(); drawTL(); renderLines();
   $("ed").classList.add("open"); $("scrim").classList.add("open");
 }
@@ -784,13 +846,57 @@ $("edSave").onclick = async () => {
   const sv = $("edStyle").value;
   let st = {...E.style, logo: $("edLogo").checked};
   if (sv === "off") st.enabled = false;
-  else if (sv === "custom") st = {...S.caption_style, layout: E.style.layout, logo: st.logo, enabled: true};
+  else if (sv === "custom") st = {...S.caption_style, layout: E.style.layout, aspect: E.style.aspect, logo: st.logo, enabled: true};
   else st = {...st, ...S.presets[sv], preset: sv, enabled: true};
   const body = {name: E.name, title: $("edTitle").value, description: $("edDesc").value,
     hashtags: $("edTags").value.split(/[\s,#]+/).filter(Boolean)};
   if (E.d.editable) Object.assign(body, {trim: E.trim, words: E.words, style: st});
   try { const j = await api("/api/clips/edit", body); toast(j.note || "Saved. Re-making the clip…"); closeEditor(); poll(); }
   catch(err){ toast(err.message); }
+};
+
+/* ---------- formats ---------- */
+const FORMATS = [["9:16","Vertical",[9,16]],["4:5","Portrait",[4,5]],["1:1","Square",[1,1]],["4:3","Classic",[4,3]],["16:9","Horizontal",[16,9]]];
+function fmtSeg(el, value, onChange){
+  el.innerHTML = FORMATS.map(([v, n, [w, h]]) => { const k = 14 / Math.max(w, h);
+    return `<button type="button" data-f="${v}" class="${v === value ? "sel" : ""}" title="${n} ${v}"><i style="width:${Math.round(w*k)}px;height:${Math.round(h*k)}px"></i>${n}</button>`; }).join("");
+  el.onclick = e => { const b = e.target.closest("button"); if (!b) return;
+    el.querySelectorAll("button").forEach(x => x.classList.toggle("sel", x === b)); onChange(b.dataset.f); };
+}
+function setFormat(v){ set({aspect: v}); toast(v === "16:9" || v === "4:3" ? `New clips: ${v}. (Facecam-on-top only works in tall formats.)` : `New clips: ${v}`); }
+
+/* ---------- faceless maker ---------- */
+let mkLayout = "fill", mkFmt = null;
+function openMk(){ $("mk").classList.add("open"); $("scrim").classList.add("open");
+  const v = S.voices || []; const names = {mac: "Mac voice (offline)"};
+  if (!$("mkVoice").options.length) $("mkVoice").innerHTML = v.map(x => `<option value="${x}">${names[x] || x[0].toUpperCase() + x.slice(1)}</option>`).join("");
+  mkFmt = mkFmt || (style && style.aspect) || "9:16"; fmtSeg($("mkFmt"), mkFmt, v2 => { mkFmt = v2; });
+  const has = !!S.has_gameplay; document.querySelector('input[name=mkbg][value=rec]').disabled = !has;
+  $("mkRecNote").textContent = has ? "Uses footage autoclip already recorded" : "No recordings yet. Watch a stream for a few minutes, or use a link.";
+  if (!has) document.querySelector('input[name=mkbg][value=link]').checked = true;
+  setTimeout(() => $("mkTopic").focus(), 50); }
+function closeMk(){ $("mk").classList.remove("open"); if (!$("drawer").classList.contains("open") && !E) $("scrim").classList.remove("open"); }
+$("openMk").onclick = openMk; $("mkClose").onclick = closeMk;
+$("mkScript").oninput = () => { const n = $("mkScript").value.trim().split(/\s+/).filter(Boolean).length; $("mkCnt").textContent = `${n} words · about ${Math.round(n / 2.6)}s`; };
+$("mkLayout").onclick = e => { const l = e.target.dataset.l; if (!l) return; mkLayout = l; document.querySelectorAll("#mkLayout button").forEach(b => b.classList.toggle("sel", b === e.target)); };
+$("mkBg").onfocus = () => { document.querySelector('input[name=mkbg][value=link]').checked = true; };
+$("mkWrite").onclick = async () => {
+  const t = $("mkTopic").value.trim(); if (!t) return toast("Type a topic first");
+  $("mkWrite").textContent = "Writing…";
+  try { const j = await api("/api/story/script", {topic: t, seconds: +$("mkSecs").value});
+    $("mkTitle").value = j.title; $("mkScript").value = j.script; $("mkScript").oninput(); $("mk")._meta = j; }
+  catch(e){ toast(e.message); }
+  $("mkWrite").textContent = "Write script";
+};
+$("mkGo").onclick = async () => {
+  const link = document.querySelector('input[name=mkbg]:checked').value === "link";
+  if (link && !$("mkBg").value.trim()) return toast("Paste a video link or file path for the background");
+  const m = $("mk")._meta || {};
+  try { await api("/api/story/make", {title: $("mkTitle").value || "Faceless video", script: $("mkScript").value,
+      voice: $("mkVoice").value, background: link ? $("mkBg").value.trim() : "", layout: mkLayout, aspect: mkFmt,
+      description: m.description || "", hashtags: m.hashtags || []});
+    toast("Making your video. Progress shows under “Working on”."); closeMk(); poll(); }
+  catch(e){ toast(e.message); }
 };
 
 function render(){
