@@ -44,11 +44,13 @@
   .chip.sel{color:var(--text);background:var(--panel)}
   .chip.sel::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--signal)}
   .chip .n{color:var(--dim);font-size:11px}
+  .pf{font:700 9px var(--mono);letter-spacing:.1em;padding:2px 5px;border-radius:2px;border:1px solid currentColor}
+  .pf.twitch{color:#a78bfa} .pf.kick{color:#53fc18} .pf.youtube{color:#ff4e45}
   .chip .x{color:var(--dim);font-size:15px;line-height:1;padding:0 2px;margin-left:2px}
   .chip .x:hover{color:var(--rec)}
   .add{display:flex;align-items:center;gap:8px;padding:8px 14px;margin-left:auto;border-left:1px solid var(--line)}
   .add input{background:var(--panel);border:1px solid var(--line2);color:var(--text);font:13px var(--mono);
-    padding:8px 10px;width:190px;border-radius:3px}
+    padding:8px 10px;width:250px;border-radius:3px}
   .add input::placeholder{color:var(--dim)}
   .add input:focus{outline:none;border-color:var(--signal)}
   .add button{font:700 12px var(--mono);padding:9px 12px;border-radius:3px;background:var(--signal);color:var(--bg)}
@@ -161,14 +163,14 @@
 
 <nav class="chbar" id="chbar">
   <form class="add" id="addForm" autocomplete="off">
-    <input id="addInput" placeholder="add channel, e.g. kaicenat" aria-label="Twitch channel name" spellcheck="false">
+    <input id="addInput" placeholder="xqc · kick.com/x · youtube.com/@x" aria-label="Twitch channel name" spellcheck="false">
     <button type="submit">Add</button>
   </form>
 </nav>
 
 <section class="hero-empty hidden" id="emptyHero">
   <h2>Add a channel to start clipping.</h2>
-  <p>Type a Twitch channel above. Each one records on its own, watches its chat, and clips the moments chat goes wild.</p>
+  <p>Paste a Twitch name, a Kick link or a YouTube channel above. Each one records on its own, watches its chat, and clips the moments chat goes wild.</p>
   <div class="sugg" id="sugg"></div>
 </section>
 
@@ -199,7 +201,7 @@
       <div class="stat"><div class="label">Peak</div><div class="v mono" id="peak">—</div></div>
       <div class="stat"><div class="label">Clips</div><div class="v mono" id="count">0</div></div>
       <div class="stat"><div class="label">Recorded</div><div class="v mono" id="size">0 MB</div></div>
-      <div class="stat"><div class="label">Chat</div><div class="v mono" id="chat" style="font-size:14px">—</div></div>
+      <div class="stat"><div class="label">Chat</div><div class="v mono" id="chat" style="font-size:12px;line-height:1.4">—</div></div>
       <div class="stat"><div class="label">Spikes</div><div class="v mono" id="spikes">0</div></div>
     </div>
     <div class="actions">
@@ -238,7 +240,8 @@ async function poll(){
 }
 
 let sel = null;
-const SUGG = ["ohnepixel","kaicenat","xqc","typicalgamer","quackity","ewroon"];
+const SUGG = ["ohnepixel","kaicenat","xqc","typicalgamer","kick.com/adinross","youtube.com/@IShowSpeed"];
+const PF = {twitch:"TW", kick:"KICK", youtube:"YT"};
 
 function renderBar(s){
   const bar = $("chbar"), names = Object.keys(s.channels);
@@ -249,18 +252,18 @@ function renderBar(s){
     let el = bar.querySelector(`.chip[data-name="${n}"]`);
     if (!el){
       el = document.createElement("button"); el.className = "chip"; el.dataset.name = n;
-      el.innerHTML = `<span class="dot"></span><span>${n}</span><span class="n"></span><span class="x" title="Remove ${n}">×</span>`;
+      el.innerHTML = `<span class="dot"></span><span class="pf ${c.platform}">${PF[c.platform]||""}</span><span>${c.label||n}</span><span class="n"></span><span class="x" title="Remove ${c.label||n}">×</span>`;
       el.onclick = e => { if (e.target.classList.contains("x")) removeCh(n); else { sel = n; render(); } };
       bar.insertBefore(el, $("addForm"));
     }
     el.classList.toggle("sel", n === sel);
     const col = c.status === "live" ? (c.chat_connected ? "var(--signal)" : "var(--amber)") : c.status === "starting" ? "var(--amber)" : "var(--rec)";
     el.querySelector(".dot").style.background = col;
-    el.querySelector(".n").textContent = c.status === "live" ? (last ? last.n + "/10s" : "…") : c.status;
+    el.querySelector(".n").textContent = c.status !== "live" ? c.status : c.chat_note ? "manual" : (last ? last.n + "/10s" : "…");
   });
   $("emptyHero").classList.toggle("hidden", !!names.length);
   $("mainGrid").classList.toggle("hidden", !names.length);
-  $("sugg").innerHTML = SUGG.filter(n => !names.includes(n)).map(n => `<button data-n="${n}">+ ${n}</button>`).join("");
+  $("sugg").innerHTML = SUGG.filter(n => !names.includes(n)).map(n => `<button data-n="${n}">+ ${n.replace(/^(kick\.com|youtube\.com)\//, "")} ${n.includes("kick")?"· kick":n.includes("youtube")?"· yt":""}</button>`).join("");
 }
 
 function render(){
@@ -273,7 +276,7 @@ function render(){
   const b = c.buckets, last = b[b.length-1] || {n:0, avg:0};
   const cfg = s.settings, thr = Math.max(cfg.min_msgs, last.avg * cfg.spike_x);
   $("rec").className = "rec " + (c.status === "live" ? "on" : "off");
-  $("channel").textContent = "twitch.tv/" + c.name;
+  $("channel").textContent = c.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/live$/, "");
   $("tc").firstChild.nodeValue = fmtT(s.now - c.started);
   $("now").textContent = last.n; $("now").classList.toggle("hot", !!last.spike);
   $("avg").textContent = c.status !== "live" ? c.status : b.length < 6 ? "learning…" : last.avg.toFixed(0);
@@ -281,7 +284,8 @@ function render(){
   $("spikes").textContent = b.filter(x=>x.spike).length;
   $("count").textContent = s.clips.filter(x=>x.status==="ready" && x.channel===c.name).length;
   $("size").textContent = mb(c.rec_bytes || 0);
-  $("chat").innerHTML = c.chat_connected ? '<span class="dot" style="background:var(--signal)"></span>live' : '<span class="dot" style="background:var(--rec)"></span>offline';
+  $("chat").innerHTML = c.chat_note ? `<span class="dot" style="background:var(--amber)"></span>${c.chat_note}`
+    : c.chat_connected ? '<span class="dot" style="background:var(--signal)"></span>live' : '<span class="dot" style="background:var(--rec)"></span>connecting…';
   const scale = Math.max(thr * 1.4, last.n * 1.1, 1);
   $("meter").style.width = Math.min(100, last.n/scale*100) + "%";
   $("meter").classList.toggle("hot", last.n >= thr && b.length >= 6);
@@ -295,8 +299,7 @@ async function api(path, body){
   const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.error || "failed"); return j;
 }
 async function addCh(name){
-  name = name.trim().toLowerCase().replace(/^.*twitch\.tv\//,"").replace(/[^a-z0-9_]/g,"");
-  if (!name) return;
+  name = name.trim(); if (!name) return;
   try{ const j = await api("/api/channels", {name}); sel = j.name; toast("Added " + j.name); $("addInput").value = ""; poll(); }
   catch(e){ toast(name + ": " + e.message); }
 }
@@ -362,7 +365,7 @@ function renderClips(clips){
         ${ready ? `<video src="/clips/${c.name}" preload="metadata" controls playsinline></video>`
                 : `<div class="busy ${c.status==="failed"?"failed":""}"><div class="label">${c.status==="failed"?"failed":c.status+"…"}</div><div class="bar"><i></i></div></div>`}
         <span class="tag ${c.reason}">${c.reason === "spike" ? "spike · " + c.peak : c.reason}</span>
-        ${c.channel ? `<span class="tag-ch">${c.channel}</span>` : ""}
+        ${c.channel ? `<span class="tag-ch">${c.channel.replace(/^(kick|youtube):/, (m,p) => (PF[p]||p) + " · ")}</span>` : ""}
       </div>
       <div class="meta"><span class="when">${ago(c.created)}</span><span>${c.size ? mb(c.size) : ""}</span></div>
       <div class="cap">${c.caption ? c.caption.replace(/</g,"&lt;") : (ready ? "—" : "")}</div>

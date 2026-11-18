@@ -13,7 +13,8 @@ Auto-clips Twitch livestreams into vertical Shorts/Reels when chat spikes.
 ## Setup (macOS)
 
 ```bash
-brew install streamlink ffmpeg
+brew install streamlink ffmpeg yt-dlp      # yt-dlp: YouTube chat
+pip3 install websocket-client curl_cffi    # Kick chat
 pip3 install pillow
 export GROQ_API_KEY=gsk_...   # free key: https://console.groq.com/keys
 ```
@@ -22,7 +23,7 @@ export GROQ_API_KEY=gsk_...   # free key: https://console.groq.com/keys
 
 ```bash
 python3 autoclip.py                         # add channels in the dashboard
-python3 autoclip.py ohnepixel kaicenat      # or start with some
+python3 autoclip.py ohnepixel kick.com/xqc youtube.com/@IShowSpeed
 ```
 
 The dashboard opens automatically at **http://localhost:8787**:
