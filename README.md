@@ -18,28 +18,32 @@ facecam split layout.
 ## Setup (macOS)
 
 ```bash
-brew install streamlink ffmpeg yt-dlp           # yt-dlp: YouTube chat + long videos
-pip3 install pillow opencv-python-headless      # captions + facecam split layout
-pip3 install websocket-client curl_cffi         # Kick chat (optional)
-export GROQ_API_KEY=gsk_...                     # free key: https://console.groq.com/keys
+brew install streamlink ffmpeg yt-dlp
+python3 autoclip.py
 ```
+
+That's it. The app opens at http://localhost:8787 and walks you through the rest:
+paste your free Groq key (https://console.groq.com/keys) once, and click **Install** for anything
+missing (Pillow for captions, OpenCV for the facecam layout). The key is stored in
+`~/.autoclip/config.json` on your Mac only.
 
 ## Run
 
 ```bash
-python3 autoclip.py                                         # add channels in the dashboard
-python3 autoclip.py ohnepixel kick.com/xqc youtube.com/@IShowSpeed
+python3 autoclip.py                                         # then paste links in the app
+python3 autoclip.py ohnepixel kick.com/xqc                  # or start watching right away
 ```
 
-## Dashboard (http://localhost:8787)
+## How to use
 
-- **Channels** — add Twitch names, Kick links or YouTube channels; one tab each, live chat chart
-- **Clip last 30 s** — button or `C`
-- **Long video → clips** — paste a YouTube / VOD link or a local file; AI reads the whole
-  transcript and cuts the strongest 3–12 moments (progress + cancel)
-- **AI on every clip** — viral score badge, hook title, hashtags, *Copy post* button, sort by top score
-- **Caption studio** — layout (Blur / Split facecam / Fill), 5 caption presets, font, size,
-  position, words on screen, colors, active-word highlight / pop, outline, box, shadow — live preview
+1. **Paste a link, press Start.**
+   - A live stream (Twitch name, `kick.com/x`, `youtube.com/@x`) → autoclip watches it and clips
+     the moments chat goes wild. Press **Clip now** any time.
+   - A video (YouTube / Twitch VOD link or a file on your Mac) → AI picks the best 3–12 moments.
+2. **Your clips** appear below with a score (🔥 Great / Good / OK), a title, **Download** and
+   **Copy caption** (title + caption + hashtags).
+3. **Settings** → pick a caption style and layout (Full video / Facecam on top / Zoomed in) with a
+   live preview. More options and a setup check are tucked away below.
 
 Clips + a `.json` sidecar (score, title, hashtags, transcript) are saved to `clips/`.
 

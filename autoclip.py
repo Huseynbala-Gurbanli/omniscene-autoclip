@@ -24,7 +24,7 @@ Platforms:
   YouTube  brew install yt-dlp
   (without these the channel still records; clip with the C button)
 """
-import argparse, json, os, re, shutil, socket, subprocess, threading, time, webbrowser
+import argparse, json, os, re, shutil, socket, subprocess, sys, threading, time, webbrowser
 
 import ai
 import layout
@@ -42,10 +42,11 @@ COOLDOWN = 60        # min seconds between clips
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = {"captions": False, "settings": {}, "channels": {}, "clips": [], "log": [],
-         "caption_style": {}, "fonts": [], "presets": {}, "jobs": [], "ai": False}
+         "caption_style": {}, "fonts": [], "presets": {}, "jobs": [], "ai": False, "setup": {}}
 STATE_LOCK = threading.Lock()
 CHANNELS = {}      # name -> Channel
 CTX = {}           # out dir, captions flag
+RENDER_SLOTS = threading.Semaphore(2)   # max clips rendering at once (keeps the Mac responsive)
 
 
 def log(msg):
@@ -269,7 +270,7 @@ class Channel:
 
     def _fire(self, start, reason, peak):
         name = f"{self.file_id}_{datetime.now():%Y%m%d_%H%M%S}.mp4"
-        threading.Thread(target=make_clip, args=(self.rec, start, CTX["out"], name, CTX["captions"],
+        threading.Thread(target=make_clip, args=(self.rec, start, CTX["out"], name, captions_ready(),
                                                  reason, peak, self.key), daemon=True).start()
 
     def _loop(self):
@@ -348,6 +349,7 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
     st = clean_style(STATE.get("caption_style"))
     set_clip(name, status="cutting", reason=reason, peak=peak, created=time.time(), caption="",
              channel=channel)
+    RENDER_SLOTS.acquire()
     try:
         start = max(0.0, float(start))
         # 1) frame-accurate cut (re-encode, fast) so word timings line up exactly
@@ -356,14 +358,20 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
                         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "16",
                         "-c:a", "aac", "-b:a", "192k", raw], check=True)
         # 2) transcript
+        note = ""
         if words is None:
             words = []
             if ai.has_key():
                 set_clip(name, status="transcribing")
                 try:
                     words = ai.transcribe(raw)
+                    if not words:
+                        note = "No speech found, so no captions"
                 except Exception as e:
+                    note = "Captions failed: " + str(e)[:120]
                     log(f"transcription failed ({e})")
+            else:
+                note = "No captions: add your Groq key in Settings"
         text = " ".join(w["word"].strip() for w in words)
         # 3) AI score / title / hashtags
         if meta is None and ai.has_key():
@@ -383,6 +391,10 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
         vf, used = layout.build_filter(st["layout"], sw, sh, face)
         # 5) captions (transparent PNG track -> no libass needed)
         inputs = ["-i", raw]
+        if words and not has_module("PIL"):
+            note = "No captions: Pillow is missing (Settings → Fix)"
+        elif words and not st["enabled"]:
+            note = "Captions are turned off in Settings"
         if words and captions and st["enabled"]:
             playlist = render_captions(words, capdir, st)
             inputs += ["-f", "concat", "-safe", "0", "-i", playlist]
@@ -395,7 +407,8 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
                         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", final],
                        check=True)
         info = {"status": "ready", "size": os.path.getsize(final), "caption": text[:140],
-                "transcript": text[:4000], "layout": used, "length": round(length, 1), **meta}
+                "transcript": text[:4000], "layout": used, "length": round(length, 1),
+                "note": note, **meta}
         set_clip(name, **info)
         with open(final.replace(".mp4", ".json"), "w") as f:
             json.dump({"reason": reason, "peak": peak, "channel": channel, **info}, f)
@@ -404,6 +417,7 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
         set_clip(name, status="failed")
         log(f"clip failed: {e}")
     finally:
+        RENDER_SLOTS.release()
         if os.path.exists(raw):
             os.remove(raw)
         shutil.rmtree(capdir, ignore_errors=True)
@@ -657,6 +671,97 @@ def save_style(st):
         pass
 
 
+# ---------------------------------------------------------------- setup: key, dependencies, self-check
+
+CONFIG = os.path.join(os.path.expanduser("~"), ".autoclip", "config.json")
+PIP_PKGS = {"pillow": "PIL", "opencv-python-headless": "cv2", "websocket-client": "websocket",
+            "curl_cffi": "curl_cffi"}
+
+
+def load_config():
+    try:
+        with open(CONFIG) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(**kw):
+    cfg = {**load_config(), **kw}
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    with open(CONFIG, "w") as f:
+        json.dump(cfg, f)
+    os.chmod(CONFIG, 0o600)
+
+
+def has_module(mod):
+    import importlib.util
+    importlib.invalidate_caches()
+    return importlib.util.find_spec(mod) is not None
+
+
+def captions_ready():
+    return not CTX.get("no_captions") and ai.has_key() and has_module("PIL")
+
+
+def refresh_setup():
+    st = {"groq": ai.has_key(), "groq_ok": STATE.get("setup", {}).get("groq_ok"),
+          "pillow": has_module("PIL"), "opencv": has_module("cv2"),
+          "websocket": has_module("websocket"), "curl_cffi": has_module("curl_cffi"),
+          "yt_dlp": bool(shutil.which("yt-dlp")), "streamlink": bool(shutil.which("streamlink")),
+          "ffmpeg": bool(shutil.which("ffmpeg")), "python": sys.executable,
+          "installing": STATE.get("setup", {}).get("installing", "")}
+    with STATE_LOCK:
+        STATE["setup"] = st
+        STATE["captions"] = captions_ready()
+        STATE["ai"] = ai.has_key()
+        STATE["facecam"] = st["opencv"]
+    return st
+
+
+def test_groq_key(key):
+    r = subprocess.run(["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+                        "https://api.groq.com/openai/v1/models", "-H", f"Authorization: Bearer {key}"],
+                       capture_output=True, text=True, timeout=20)
+    return r.stdout.strip()
+
+
+def set_groq_key(key):
+    key = (key or "").strip()
+    if not re.fullmatch(r"gsk_[A-Za-z0-9]{20,}", key):
+        return "That doesn't look like a Groq key (it starts with gsk_)"
+    code = test_groq_key(key)
+    if code == "401":
+        return "Groq says this key is invalid"
+    if code not in ("200", "429"):
+        return f"Couldn't reach Groq to check the key (HTTP {code or 'error'})"
+    os.environ["GROQ_API_KEY"] = key
+    save_config(groq_key=key)
+    STATE.setdefault("setup", {})["groq_ok"] = True
+    refresh_setup()
+    log("Groq key saved - captions and AI titles are on")
+    return None
+
+
+def install_pkg(pkg):
+    """pip install into the SAME Python that runs autoclip (avoids pip3/python3 mismatch)."""
+    if pkg not in PIP_PKGS:
+        return
+    STATE["setup"]["installing"] = pkg
+    log(f"installing {pkg} ...")
+    ok = False
+    for extra in ([], ["--user"], ["--user", "--break-system-packages"]):
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *extra, pkg],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            ok = True
+            break
+    STATE["setup"]["installing"] = ""
+    refresh_setup()
+    log(f"{pkg} installed" if ok and has_module(PIP_PKGS[pkg]) else
+        f"couldn't install {pkg}: run  {sys.executable} -m pip install {pkg}")
+
+
 # ---------------------------------------------------------------- long video -> best clips
 
 def set_job(job, **kw):
@@ -734,7 +839,7 @@ def run_vod(job):
             set_job(job, stage=f"rendering {k}/{len(moments)}", progress=(k - 1) / len(moments))
             name = f"vod-{slug}_{stamp}_{k}.mp4"
             meta = {key: m[key] for key in ("score", "title", "hook", "description", "hashtags", "why")}
-            make_clip(src, m["start"], out, name, CTX["captions"], reason="vod", channel=f"vod:{slug}",
+            make_clip(src, m["start"], out, name, captions_ready(), reason="vod", channel=f"vod:{slug}",
                       length=m["end"] - m["start"], words=ai.words_between(words, m["start"], m["end"]),
                       meta=meta)
             job["clips"].append(name)
@@ -748,6 +853,40 @@ def run_vod(job):
             shutil.rmtree(work, ignore_errors=True)
         else:
             shutil.rmtree(os.path.join(work, "audio"), ignore_errors=True)
+
+
+def looks_like_video(raw):
+    """Decide: live channel to watch, or a video to cut into clips."""
+    t = raw.strip()
+    if os.path.isfile(os.path.expanduser(t)):
+        return True
+    low = t.lower()
+    if re.search(r"twitch\.tv/videos/|kick\.com/[\w-]+/videos?/|kick\.com/video/|youtube\.com/shorts/", low):
+        return True
+    if re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)", low):
+        # a watch link can be a live stream; ask yt-dlp
+        if shutil.which("yt-dlp"):
+            try:
+                r = subprocess.run(["yt-dlp", "--no-warnings", "--skip-download", "--print", "%(is_live)s", t],
+                                   capture_output=True, text=True, timeout=25)
+                return r.stdout.strip().splitlines()[-1:] != ["True"]
+            except Exception:
+                return True
+        return True
+    if re.match(r"https?://", low) and not re.search(r"(twitch\.tv|kick\.com|youtube\.com/@|youtube\.com/c/|youtube\.com/channel/)", low):
+        return True            # any other site link: treat as a video
+    return False
+
+
+def start_any(raw, count=5, min_len=20, max_len=60):
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None, "Paste a link first"
+    if looks_like_video(raw):
+        job, err = start_vod(raw, count, min_len, max_len)
+        return "video", (job or {}).get("id"), err
+    ch, err = add_channel(raw)
+    return "live", ch.key if ch else None, err
 
 
 def start_vod(url, count=6, min_len=20, max_len=60):
@@ -793,6 +932,9 @@ def make_handler(out_dir):
                 with open(os.path.join(HERE, "dashboard.html"), "rb") as f:
                     return self._send(200, f.read(), "text/html; charset=utf-8")
             if path == "/api/state":
+                if time.time() - CTX.get("setup_at", 0) > 5:
+                    CTX["setup_at"] = time.time()
+                    refresh_setup()
                 with STATE_LOCK:
                     for v in STATE["channels"].values():
                         if os.path.exists(v["recording"]):
@@ -830,6 +972,26 @@ def make_handler(out_dir):
                 if not ch or ch.stop.is_set():
                     return self._send(400, {"error": "channel not running"})
                 ch.manual.set()
+                return self._send(200, {"ok": True})
+            if path == "/api/start":
+                kind, ident, err = start_any(body.get("input"), body.get("count", 5),
+                                             body.get("min_len", 20), body.get("max_len", 60))
+                return self._send(400 if err else 200, {"error": err} if err else {"ok": True, "kind": kind, "id": ident})
+            if path == "/api/setup/key":
+                err = set_groq_key(body.get("key"))
+                return self._send(400 if err else 200, {"error": err} if err else {"ok": True})
+            if path == "/api/setup/install":
+                threading.Thread(target=install_pkg, args=(str(body.get("pkg", "")),), daemon=True).start()
+                return self._send(200, {"ok": True})
+            if path == "/api/clips/delete":
+                n = str(body.get("name", ""))
+                if re.fullmatch(r"[\w-]+\.mp4", n):
+                    for ext in (".mp4", ".json"):
+                        fp = os.path.join(out_dir, n.replace(".mp4", ext))
+                        if os.path.exists(fp):
+                            os.remove(fp)
+                    with STATE_LOCK:
+                        STATE["clips"] = [c for c in STATE["clips"] if c["name"] != n]
                 return self._send(200, {"ok": True})
             if path == "/api/vod":
                 job, err = start_vod(body.get("url"), body.get("count", 6),
@@ -923,38 +1085,29 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     load_existing(a.out)
-    captions = not a.no_captions and bool(os.environ.get("GROQ_API_KEY"))
-    if not a.no_captions and not captions:
-        log("GROQ_API_KEY not set -> clips without captions")
-    try:
-        import PIL  # noqa: F401
-    except ImportError:
-        if captions:
-            log("Pillow missing -> run: pip3 install pillow  (captions off)")
-        captions = False
-    CTX.update(out=a.out, captions=captions)
+    if not os.environ.get("GROQ_API_KEY") and load_config().get("groq_key"):
+        os.environ["GROQ_API_KEY"] = load_config()["groq_key"]
+    CTX.update(out=a.out, no_captions=a.no_captions)
+    setup = refresh_setup()
+    if not setup["groq"]:
+        log("No Groq key yet - add it in the dashboard (Settings) to turn on captions + AI titles")
+    if not setup["pillow"]:
+        log(f"Pillow missing - click Fix in Settings, or run: {sys.executable} -m pip install pillow")
     try:
         with open(os.path.join(a.out, ".caption_style.json")) as f:
             STATE["caption_style"] = clean_style(json.load(f))
     except (OSError, ValueError):
         STATE["caption_style"] = dict(DEFAULT_STYLE)
     STATE["fonts"] = list(FONT_FILES)
-    STATE["ai"] = ai.has_key()
-    try:
-        import cv2  # noqa: F401
-        STATE["facecam"] = True
-    except ImportError:
-        STATE["facecam"] = False
     STATE["presets"] = PRESETS
-    STATE.update(captions=captions,
-                 settings={"window": WINDOW, "spike_x": SPIKE_X, "min_msgs": MIN_MSGS,
+    STATE.update(settings={"window": WINDOW, "spike_x": SPIKE_X, "min_msgs": MIN_MSGS,
                            "clip_len": CLIP_LEN, "cooldown": COOLDOWN})
     start_dashboard(a.out, a.port, not a.no_browser)
     for name in a.channels:
         _, err = add_channel(name)
         if err:
             log(f"{name}: {err}")
-    log("running - add channels in the dashboard (Ctrl+C to stop)")
+    log("ready - open http://localhost:%d and paste a link (Ctrl+C to stop)" % a.port)
     try:
         while True:
             time.sleep(1)
