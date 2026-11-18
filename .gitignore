@@ -1,0 +1,8 @@
+clips/
+*.ts
+*.mp4
+*.mp3
+*.srt
+.env
+__pycache__/
+.DS_Store
