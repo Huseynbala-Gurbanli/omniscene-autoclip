@@ -437,32 +437,77 @@ def set_clip(name, **kw):
         STATE["clips"].insert(0, {"name": name, **kw})
 
 
+PAD = 8.0          # extra seconds kept on each side of a clip so the editor can extend it
+
+
+def src_dir(out_dir=None):
+    d = os.path.join(out_dir or CTX["out"], ".sources")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def sidecar_path(name):
+    return os.path.join(CTX["out"], name.replace(".mp4", ".json"))
+
+
+def read_sidecar(name):
+    try:
+        with open(sidecar_path(name)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_sidecar(name, data):
+    with open(sidecar_path(name), "w") as f:
+        json.dump(data, f)
+
+
+def media_duration(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                       capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+LOGO = os.path.join(os.path.expanduser("~"), ".autoclip", "logo.png")
+
+
 def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, channel="",
-              length=None, words=None, meta=None, context=""):
-    """Cut -> transcribe -> AI score -> layout -> captions -> final 9:16 mp4 (+ .json sidecar)."""
+              length=None, words=None, meta=None, context="", all_words=None):
+    """Cut a padded source -> transcribe -> AI score -> render. The padded source + word timings
+    are kept so the clip can be trimmed / re-captioned later in the editor."""
     length = length or CLIP_LEN
-    raw = os.path.join(out_dir, name.replace(".mp4", "_raw.mp4"))
-    final = os.path.join(out_dir, name)
-    capdir = raw.replace(".mp4", "_caps")
+    source = os.path.join(src_dir(out_dir), name)
     st = clean_style(STATE.get("caption_style"))
     set_clip(name, status="cutting", reason=reason, peak=peak, created=time.time(), caption="",
              channel=channel)
     RENDER_SLOTS.acquire()
     try:
         start = max(0.0, float(start))
-        # 1) frame-accurate cut (re-encode, fast) so word timings line up exactly
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "fatal", "-ss", f"{start:.3f}", "-i", src,
-                        "-t", f"{length:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
-                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "16",
-                        "-c:a", "aac", "-b:a", "192k", raw], check=True)
-        # 2) transcript
+        before = min(PAD, start)
+        src_start = start - before
+        # 1) frame-accurate padded cut (re-encode, fast) so word timings line up exactly
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "fatal", "-ss", f"{src_start:.3f}", "-i", src,
+                        "-t", f"{length + before + PAD:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "17",
+                        "-c:a", "aac", "-b:a", "192k", source], check=True)
+        src_len = media_duration(source) or (length + before)
+        trim = [round(before, 2), round(min(before + length, src_len), 2)]
+        # 2) transcript of the whole padded source
         note = ""
-        if words is None:
+        if all_words is not None:
+            words = ai.words_between(all_words, src_start, src_start + src_len)
+        elif words is not None:
+            words = [{**w, "start": w["start"] + before, "end": w["end"] + before} for w in words]
+        else:
             words = []
             if ai.has_key():
                 set_clip(name, status="transcribing")
                 try:
-                    words = ai.transcribe(raw)
+                    words = ai.transcribe(source)
                     if not words:
                         note = "No speech found, so no captions"
                 except Exception as e:
@@ -470,7 +515,7 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
                     log(f"transcription failed ({e})")
             else:
                 note = "No captions: add your Groq key in Settings"
-        text = " ".join(w["word"].strip() for w in words)
+        text = " ".join(w["word"].strip() for w in words if trim[0] <= w["start"] <= trim[1])
         # 3) AI score / title / hashtags
         if meta is None and ai.has_key():
             set_clip(name, status="scoring")
@@ -480,81 +525,238 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
             except Exception as e:
                 log(f"AI scoring failed ({e})")
         meta = meta or {}
-        # 4) layout
-        set_clip(name, status="rendering", **meta)
-        sw, sh = layout.probe_size(raw)
-        try:
-            face = layout.detect_facecam(raw) if st["layout"] == "split" else None
-        except Exception as e:
-            log(f"face detection unavailable ({str(e)[:80]}) -> full video layout")
-            face = None
-        if st["layout"] == "split" and not face:
-            log(f"{name}: no facecam found -> blur layout")
-        vf, used = layout.build_filter(st["layout"], sw, sh, face)
-        # 5) captions (transparent PNG track -> no libass needed)
-        inputs = ["-i", raw]
-        if words and not has_module("PIL"):
-            note = "No captions: Pillow is missing (Settings → Fix)"
+        if words and not captions and not has_module("PIL"):
+            note = "No captions: the caption engine isn't ready (restart autoclip)"
         elif words and not st["enabled"]:
             note = "Captions are turned off in Settings"
-        if words and captions and st["enabled"]:
-            playlist = render_captions(words, capdir, st)
-            inputs += ["-f", "concat", "-safe", "0", "-i", playlist]
-            vf += ";[base][1:v]overlay=0:0:eof_action=repeat[v]"
-        else:
-            vf += ";[base]null[v]"
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", vf,
-                        "-map", "[v]", "-map", "0:a?", "-t", f"{length:.3f}", "-c:v", "libx264",
-                        "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", final],
-                       check=True)
-        info = {"status": "ready", "size": os.path.getsize(final), "caption": text[:140],
-                "transcript": text[:4000], "layout": used, "length": round(length, 1),
-                "note": note, **meta}
-        set_clip(name, **info)
-        with open(final.replace(".mp4", ".json"), "w") as f:
-            json.dump({"reason": reason, "peak": peak, "channel": channel, **info}, f)
-        log(f"✅ saved {final}" + (f"  · score {meta['score']} · {meta.get('title', '')}" if meta.get("score") is not None else ""))
+        write_sidecar(name, {"reason": reason, "peak": peak, "channel": channel, "created": time.time(),
+                             "source": name, "trim": trim, "src_len": round(src_len, 2), "words": words,
+                             "style": st, "captions": bool(captions), "note": note, **meta})
+        render_clip(name)
     except Exception as e:
         set_clip(name, status="failed")
         log(f"clip failed: {e}")
     finally:
         RENDER_SLOTS.release()
-        if os.path.exists(raw):
-            os.remove(raw)
+
+
+def render_clip(name):
+    """(Re)build the final 9:16 clip from its padded source + sidecar (trim, words, style, logo)."""
+    sc = read_sidecar(name)
+    out = CTX["out"]
+    source = os.path.join(src_dir(out), sc.get("source", name))
+    final = os.path.join(out, name)
+    tmp = final.replace(".mp4", ".rendering.mp4")
+    capdir = os.path.join(out, f".caps_{name[:-4]}")
+    st = clean_style(sc.get("style"))
+    a, b = sc["trim"]
+    dur = max(1.0, b - a)
+    set_clip(name, status="rendering")
+    try:
+        # layout (facecam detected once per clip, then cached)
+        sw, sh = layout.probe_size(source)
+        face = sc.get("face")
+        if st["layout"] == "split" and face is None:
+            try:
+                face = layout.detect_facecam(source) or False
+            except Exception as e:
+                log(f"face detection unavailable ({str(e)[:80]}) -> full video layout")
+                face = False
+            sc["face"] = face
+        if st["layout"] == "split" and not face:
+            log(f"{name}: no facecam found -> full video layout")
+        vf, used = layout.build_filter(st["layout"], sw, sh, face or None)
+        inputs, idx, last = ["-ss", f"{a:.3f}", "-t", f"{dur:.3f}", "-i", source], 1, "base"
+        clip_words = [{"word": w["word"], "start": w["start"] - a, "end": w["end"] - a}
+                      for w in sc.get("words", []) if w["start"] >= a - 0.05 and w["end"] <= b + 0.05]
+        if clip_words and st["enabled"] and has_module("PIL"):
+            playlist = render_captions(clip_words, capdir, st)
+            inputs += ["-f", "concat", "-safe", "0", "-i", playlist]
+            vf += f";[{last}][{idx}:v]overlay=0:0:eof_action=repeat[cap]"
+            last, idx = "cap", idx + 1
+        if st["logo"] and os.path.exists(LOGO):
+            lw = int(1080 * st["logo_size"] / 100) // 2 * 2
+            m = 48
+            pos = {"tl": (f"{m}", f"{m + 40}"), "tr": (f"W-w-{m}", f"{m + 40}"),
+                   "bl": (f"{m}", f"H-h-{m + 120}"), "br": (f"W-w-{m}", f"H-h-{m + 120}")}[st["logo_pos"]]
+            inputs += ["-i", LOGO]
+            vf += f";[{idx}:v]scale={lw}:-1,format=rgba,colorchannelmixer=aa=0.92[lg];[{last}][lg]overlay={pos[0]}:{pos[1]}[lg2]"
+            last, idx = "lg2", idx + 1
+        vf += f";[{last}]null[v]"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", vf,
+                        "-map", "[v]", "-map", "0:a?", "-t", f"{dur:.3f}", "-c:v", "libx264",
+                        "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", tmp], check=True)
+        os.replace(tmp, final)
+        text = " ".join(w["word"].strip() for w in clip_words)
+        sc.update(layout=used, length=round(dur, 1), size=os.path.getsize(final), caption=text[:140],
+                  transcript=text[:4000], version=sc.get("version", 0) + 1)
+        write_sidecar(name, sc)
+        info = {k: v for k, v in sc.items() if k not in ("words", "style", "face")}
+        set_clip(name, status="ready", **info)
+        log(f"✅ saved {final}" + (f"  · score {sc['score']} · {sc.get('title', '')}" if sc.get("score") is not None else ""))
+    except Exception as e:
+        set_clip(name, status="ready" if os.path.exists(final) else "failed")
+        log(f"render failed: {e}")
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
         shutil.rmtree(capdir, ignore_errors=True)
+
+
+def edit_clip(name, body):
+    """Apply editor changes (trim, caption text, style/layout/logo, title...) and re-render."""
+    sc = read_sidecar(name)
+    if not sc.get("source") or not os.path.exists(os.path.join(src_dir(), sc["source"])):
+        # clips from before the editor existed: only text fields can change
+        for k in ("title", "description", "hashtags"):
+            if k in body:
+                sc[k] = body[k]
+        write_sidecar(name, sc)
+        set_clip(name, **{k: sc.get(k) for k in ("title", "description", "hashtags")})
+        return "This older clip can't be re-cut, but its title and caption were saved."
+    if "trim" in body:
+        a, b = (float(x) for x in body["trim"])
+        a = max(0.0, min(a, sc["src_len"] - 1))
+        b = max(a + 1, min(b, sc["src_len"]))
+        sc["trim"] = [round(a, 2), round(b, 2)]
+    if isinstance(body.get("words"), list):
+        sc["words"] = [{"word": str(w["word"])[:40], "start": float(w["start"]), "end": float(w["end"])}
+                       for w in body["words"] if str(w.get("word", "")).strip()]
+    if isinstance(body.get("style"), dict):
+        sc["style"] = clean_style({**sc.get("style", {}), **body["style"]})
+        if body["style"].get("layout"):
+            sc.pop("face", None) if sc.get("face") is False else None
+    for k in ("title", "description", "hashtags"):
+        if k in body:
+            sc[k] = body[k]
+    write_sidecar(name, sc)
+
+    def job():
+        with RENDER_SLOTS:
+            render_clip(name)
+    threading.Thread(target=job, daemon=True).start()
+    return None
 
 
 # ---------------------------------------------------------------- caption studio
 
 # font name -> candidate files (macOS first, Linux fallbacks); (path, ttc index)
+FONT_DIR = os.path.join(HERE, "fonts")
+# font name -> candidate files (bundled first, then macOS, then Linux fallbacks); (path, ttc index)
 FONT_FILES = {
-    "Arial Black": [("/System/Library/Fonts/Supplemental/Arial Black.ttf", 0),
-                    ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0)],
-    "Impact":      [("/System/Library/Fonts/Supplemental/Impact.ttf", 0),
-                    ("/usr/share/fonts/truetype/liberation/LiberationSansNarrow-Bold.ttf", 0)],
-    "Helvetica":   [("/System/Library/Fonts/Helvetica.ttc", 1),
-                    ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 0)],
-    "Rounded":     [("/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf", 0),
-                    ("/usr/share/fonts/truetype/google-fonts/Poppins-Bold.ttf", 0)],
-    "Georgia":     [("/System/Library/Fonts/Supplemental/Georgia Bold.ttf", 0),
-                    ("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", 0)],
+    "Arial Black":  [("/System/Library/Fonts/Supplemental/Arial Black.ttf", 0),
+                     ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0)],
+    "Montserrat":   [(os.path.join(FONT_DIR, "Montserrat[wght].ttf"), 0)],
+    "Anton":        [(os.path.join(FONT_DIR, "Anton-Regular.ttf"), 0)],
+    "Bebas Neue":   [(os.path.join(FONT_DIR, "BebasNeue-Regular.ttf"), 0)],
+    "Luckiest Guy": [(os.path.join(FONT_DIR, "LuckiestGuy-Regular.ttf"), 0)],
+    "Bangers":      [(os.path.join(FONT_DIR, "Bangers-Regular.ttf"), 0)],
+    "Poppins":      [(os.path.join(FONT_DIR, "Poppins-Black.ttf"), 0)],
+    "Impact":       [("/System/Library/Fonts/Supplemental/Impact.ttf", 0),
+                     (os.path.join(FONT_DIR, "Anton-Regular.ttf"), 0)],
+    "Helvetica":    [("/System/Library/Fonts/Helvetica.ttc", 1),
+                     ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 0)],
+    "Rounded":      [("/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf", 0),
+                     (os.path.join(FONT_DIR, "Poppins-Black.ttf"), 0)],
+    "Georgia":      [("/System/Library/Fonts/Supplemental/Georgia Bold.ttf", 0),
+                     ("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", 0)],
 }
 
+_P = {"box": False, "shadow": False, "pop": False, "animation": "none", "emoji": False}
 PRESETS = {
-    "bold":    {"font": "Arial Black", "size": 100, "uppercase": True, "words": 3, "color": "#FFFFFF",
-                "highlight": "#FFFFFF", "outline": 9, "box": False, "shadow": False, "pop": False},
-    "karaoke": {"font": "Arial Black", "size": 100, "uppercase": True, "words": 3, "color": "#FFFFFF",
-                "highlight": "#D4FF3A", "outline": 9, "box": False, "shadow": False, "pop": False},
-    "pop":     {"font": "Impact", "size": 120, "uppercase": True, "words": 2, "color": "#FFFFFF",
-                "highlight": "#FFD400", "outline": 10, "box": False, "shadow": True, "pop": True},
-    "box":     {"font": "Helvetica", "size": 76, "uppercase": False, "words": 4, "color": "#FFFFFF",
-                "highlight": "#FFFFFF", "outline": 0, "box": True, "shadow": False, "pop": False},
-    "minimal": {"font": "Rounded", "size": 70, "uppercase": False, "words": 5, "color": "#FFFFFF",
-                "highlight": "#FFFFFF", "outline": 0, "box": False, "shadow": True, "pop": False},
+    "hype":    {**_P, "font": "Luckiest Guy", "size": 110, "uppercase": True, "words": 2, "color": "#FFFFFF",
+                "highlight": "#FFD400", "outline": 10, "shadow": True, "animation": "bounce", "emoji": True},
+    "punchy":  {**_P, "font": "Montserrat", "size": 100, "uppercase": True, "words": 3, "color": "#FFFFFF",
+                "highlight": "#3DFF6E", "outline": 9, "animation": "zoom"},
+    "karaoke": {**_P, "font": "Arial Black", "size": 100, "uppercase": True, "words": 3, "color": "#FFFFFF",
+                "highlight": "#D4FF3A", "outline": 9},
+    "bold":    {**_P, "font": "Arial Black", "size": 100, "uppercase": True, "words": 3, "color": "#FFFFFF",
+                "highlight": "#FFFFFF", "outline": 9},
+    "pop":     {**_P, "font": "Impact", "size": 120, "uppercase": True, "words": 2, "color": "#FFFFFF",
+                "highlight": "#FFD400", "outline": 10, "shadow": True, "pop": True},
+    "box":     {**_P, "font": "Helvetica", "size": 76, "uppercase": False, "words": 4, "color": "#FFFFFF",
+                "highlight": "#FFFFFF", "outline": 0, "box": True},
+    "minimal": {**_P, "font": "Rounded", "size": 70, "uppercase": False, "words": 5, "color": "#FFFFFF",
+                "highlight": "#FFFFFF", "outline": 0, "shadow": True},
 }
-DEFAULT_STYLE = {"enabled": True, "preset": "karaoke", "position": 75, "layout": "blur", **PRESETS["karaoke"]}
+DEFAULT_STYLE = {"enabled": True, "preset": "hype", "position": 75, "layout": "blur",
+                 "logo": False, "logo_pos": "tr", "logo_size": 18, **PRESETS["hype"]}
 _font_cache = {}
+
+# ---- emoji: one per caption chunk, picked from what's being said
+EMOJI = [
+    (r"\b(lol|lmao|haha+|funny|hilarious|joke|laugh)", "😂"), (r"\b(dead|died|dying|kill|killed|rip)\b", "💀"),
+    (r"\b(fire|lit|insane|crazy|wild|goat|best)\b", "🔥"), (r"\b(money|cash|rich|dollars?|bucks|paid|million)", "💰"),
+    (r"\b(cops?|police|sheriff|arrest|wanted)\b", "🚓"), (r"\b(car|truck|drive|driving|speed|race|crash)", "🚗"),
+    (r"\b(gun|shoot|shot|shots|bullet)", "🔫"), (r"\b(love|heart|cute|baby)\b", "❤️"),
+    (r"\b(what|huh|wait|why|how)\b", "🤔"), (r"\b(no way|omg|oh my god|bro|yo+|wow)\b", "😱"),
+    (r"\b(win|won|winner|clutch|lets go|let's go|gg)\b", "🏆"), (r"\b(fail|lost|lose|bad|worst)\b", "😭"),
+    (r"\b(angry|mad|rage|hate)\b", "😡"), (r"\b(cold|ice|freeze)\b", "🥶"), (r"\b(hot|heat)\b", "🥵"),
+    (r"\b(eat|food|hungry|pizza|burger)\b", "🍔"), (r"\b(game|gaming|gta|play)\b", "🎮"),
+    (r"\b(boom|explode|explosion|bomb)\b", "💥"), (r"\b(secret|hidden|easter egg)\b", "🤫"),
+    (r"\b(fast|quick|speed)\b", "⚡"), (r"\b(stole|steal|rob|robbery|heist)\b", "🦹"),
+]
+EMOJI_FONTS = [("/System/Library/Fonts/Apple Color Emoji.ttc", (160, 96, 64)),       # macOS
+               ("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf", (109,))]       # Linux (bitmap)
+TWEMOJI = "https://raw.githubusercontent.com/jdecked/twemoji/main/assets/72x72/{}.png"   # CC-BY 4.0 fallback
+
+
+def pick_emoji(text):
+    low = text.lower()
+    for pat, e in EMOJI:
+        if re.search(pat, low):
+            return e
+    return ""
+
+
+_emoji_font = []
+
+
+def _twemoji(e):
+    """Fallback when no color-emoji font is installed: Twemoji PNG, cached in fonts/emoji/."""
+    from PIL import Image
+    code = "-".join(f"{ord(c):x}" for c in e if ord(c) != 0xFE0F)
+    path = os.path.join(FONT_DIR, "emoji", code + ".png")
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            subprocess.run(["curl", "-sSfL", "-o", path, TWEMOJI.format(code)], timeout=20, check=True)
+        except Exception:
+            return None
+    try:
+        return Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+
+
+def emoji_image(e, px):
+    """Render a color emoji to an RGBA image px tall (Apple Color Emoji on Mac, else Noto / Twemoji)."""
+    from PIL import Image, ImageDraw, ImageFont
+    if not _emoji_font:
+        for path, sizes in EMOJI_FONTS:
+            for sz in sizes:
+                if os.path.exists(path):
+                    try:
+                        _emoji_font.append((ImageFont.truetype(path, sz), sz))
+                        break
+                    except OSError:
+                        continue
+            if _emoji_font:
+                break
+        if not _emoji_font:
+            _emoji_font.append((None, 0))
+    font, sz = _emoji_font[0]
+    im = None
+    if font:
+        im = Image.new("RGBA", (int(sz * 1.4), int(sz * 1.4)), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((im.width // 2, im.height // 2), e, font=font, anchor="mm", embedded_color=True)
+        im = im.crop(im.getbbox()) if im.getbbox() else None
+    if im is None:
+        im = _twemoji(e)
+    if im is None:
+        return None
+    return im.resize((max(1, int(im.width * px / im.height)), px), Image.LANCZOS)
 
 
 def load_font(name, size):
@@ -566,6 +768,11 @@ def load_font(name, size):
             if os.path.exists(path):
                 try:
                     f = ImageFont.truetype(path, int(size), index=idx)
+                    if "[wght]" in path:
+                        try:
+                            f.set_variation_by_axes([850])     # Montserrat ExtraBold/Black
+                        except Exception:
+                            pass
                     break
                 except OSError:
                     continue
@@ -585,18 +792,26 @@ def clean_style(st):
     out["position"] = max(8, min(92, int(out["position"])))
     out["words"] = max(1, min(6, int(out["words"])))
     out["outline"] = max(0, min(16, int(out["outline"])))
+    out["logo_size"] = max(8, min(40, int(out["logo_size"])))
     for k in ("color", "highlight"):
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(out[k])):
             out[k] = DEFAULT_STYLE[k]
     if out["layout"] not in ("blur", "split", "fill"):
         out["layout"] = "blur"
+    if out["animation"] not in ("none", "bounce", "zoom"):
+        out["animation"] = "none"
+    if out["logo_pos"] not in ("tl", "tr", "bl", "br"):
+        out["logo_pos"] = "tr"
     if out["font"] not in FONT_FILES:
         out["font"] = DEFAULT_STYLE["font"]
+    for k in ("uppercase", "box", "shadow", "pop", "emoji", "enabled", "logo"):
+        out[k] = bool(out[k])
     return out
 
 
-def draw_caption(texts, active, st):
-    """One caption frame: list of words, index of the active (spoken) word or -1."""
+def draw_caption(texts, active, st, active_scale=1.0, scale_all=1.0, emoji=""):
+    """One caption frame. active = index of the spoken word (-1 none); active_scale grows that
+    word (pop / bounce); scale_all zooms the whole caption (zoom-in animation)."""
     from PIL import Image, ImageDraw, ImageFilter
     W, H, maxw = 1080, 1920, 960
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -605,11 +820,12 @@ def draw_caption(texts, active, st):
     size = st["size"]
     texts = [t.upper() if st["uppercase"] else t for t in texts]
     probe = ImageDraw.Draw(img)
+    grow = active_scale * (1.18 if st["pop"] else 1.0)
 
     def layout(sz):
         base = load_font(st["font"], sz)
-        big = load_font(st["font"], int(sz * 1.18)) if st["pop"] else base
-        fonts = [big if (i == active and st["pop"]) else base for i in range(len(texts))]
+        big = load_font(st["font"], int(sz * grow)) if grow != 1.0 else base
+        fonts = [big if i == active else base for i in range(len(texts))]
         widths = [probe.textlength(t, font=f) for t, f in zip(texts, fonts)]
         return base, fonts, widths, probe.textlength(" ", font=base)
 
@@ -667,39 +883,84 @@ def draw_caption(texts, active, st):
     for x, by, t, f, is_act in placed:
         d.text((x, by), t, font=f, anchor="ls", fill=st["highlight"] if is_act else st["color"],
                stroke_width=st["outline"], stroke_fill="black")
+
+    if emoji:
+        em = emoji_image(emoji, int(sz * 1.15))
+        if em is not None:
+            img.alpha_composite(em, ((W - em.width) // 2, max(0, top - em.height - int(sz * 0.12))))
+
+    if scale_all != 1.0:          # zoom the whole caption around its center
+        bbox = img.getbbox()
+        if bbox:
+            part = img.crop(bbox)
+            nw, nh = max(1, int(part.width * scale_all)), max(1, int(part.height * scale_all))
+            part = part.resize((nw, nh))
+            cx, cyc = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            img.alpha_composite(part, (max(0, int(cx - nw / 2)), max(0, int(cyc - nh / 2))))
     return img
 
 
+ANIM_FRAMES = [0.0, 0.035, 0.07, 0.105, 0.14, 0.18]     # seconds into a word/chunk
+
+
+def _anim(kind, t):
+    """(active_scale, scale_all) at time t after the word/chunk appears."""
+    p = min(1.0, t / 0.18)
+    if kind == "bounce":
+        return 1.0 + 0.32 * (1 - p) ** 2, 1.0
+    if kind == "zoom":
+        back = 1 + 2.2 * (p - 1) ** 3 + 1.2 * (p - 1) ** 2      # ease-out-back: 0 -> ~1.06 -> 1
+        return 1.0, 0.55 + 0.45 * back
+    return 1.0, 1.0
+
+
 def render_captions(words, outdir, style=None):
-    """Words -> transparent PNG frames + concat playlist (a caption video track)."""
+    """Words -> transparent PNG frames + concat playlist (a caption video track).
+    Supports karaoke highlight, bounce / zoom animations and emoji."""
     from PIL import Image
     st = clean_style(style or STATE.get("caption_style"))
     os.makedirs(outdir, exist_ok=True)
     blank = os.path.abspath(os.path.join(outdir, "blank.png"))
     Image.new("RGBA", (1080, 1920), (0, 0, 0, 0)).save(blank)
-    karaoke = st["highlight"].lower() != st["color"].lower() or st["pop"]
-    segs = []   # (start, end, words_in_chunk, active)
+    anim = st["animation"]
+    karaoke = st["highlight"].lower() != st["color"].lower() or st["pop"] or anim == "bounce"
+    segs = []   # (start, end, words_in_chunk, active, first_of_chunk, emoji)
     per = st["words"]
     for i in range(0, len(words), per):
         chunk = words[i:i + per]
         texts = [w["word"].strip() for w in chunk]
+        emo = pick_emoji(" ".join(texts)) if st["emoji"] else ""
         c_end = float(chunk[-1]["end"])
         if karaoke:
             for j, w in enumerate(chunk):
                 s0 = float(w["start"])
                 s1 = float(chunk[j + 1]["start"]) if j + 1 < len(chunk) else c_end
-                segs.append((s0, max(s1, s0 + 0.05), texts, j))
+                segs.append((s0, max(s1, s0 + 0.05), texts, j, j == 0, emo))
         else:
-            segs.append((float(chunk[0]["start"]), c_end, texts, -1))
+            segs.append((float(chunk[0]["start"]), c_end, texts, -1, True, emo))
     lines, t, n = [], 0.0, 0
-    for s0, s1, texts, act in segs:
+
+    def add(img, dur):
+        nonlocal n
+        png = os.path.abspath(os.path.join(outdir, f"c{n:05d}.png"))
+        img.save(png)
+        n += 1
+        lines.extend([f"file '{png}'", f"duration {max(0.02, dur):.3f}"])
+
+    for s0, s1, texts, act, first, emo in segs:
         if s0 > t + 0.01:
             lines += [f"file '{blank}'", f"duration {s0 - t:.3f}"]
-        png = os.path.abspath(os.path.join(outdir, f"c{n:04d}.png"))
-        draw_caption(texts, act, st).save(png)
-        n += 1
-        dur = max(0.04, s1 - max(s0, t))
-        lines += [f"file '{png}'", f"duration {dur:.3f}"]
+        start = max(s0, t)
+        dur = s1 - start
+        animate = (anim == "bounce" and act >= 0) or (anim == "zoom" and first)
+        if animate and dur > 0.2:
+            for k, ft in enumerate(ANIM_FRAMES[:-1]):
+                a_s, s_all = _anim(anim, ft)
+                add(draw_caption(texts, act, st, a_s, s_all, emo), ANIM_FRAMES[k + 1] - ft)
+            add(draw_caption(texts, act, st, emoji=emo), dur - ANIM_FRAMES[-1])
+        else:
+            add(draw_caption(texts, act, st, emoji=emo), dur)
         t = max(s1, t)
     lines += [f"file '{blank}'", "duration 0.1", f"file '{blank}'"]
     playlist = os.path.join(outdir, "caps.txt")
@@ -763,7 +1024,17 @@ def caption_preview(style, channel=None):
     canvas = layout.compose_preview(frame, st["layout"], face)
     texts = [w["word"] for w in SAMPLE[:st["words"]]]
     act = min(1, len(texts) - 1) if (st["highlight"].lower() != st["color"].lower() or st["pop"]) else -1
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), draw_caption(texts, act, st))
+    emo = pick_emoji(" ".join(texts)) if st["emoji"] else ""
+    a_s = 1.12 if st["animation"] == "bounce" and act >= 0 else 1.0
+    canvas = Image.alpha_composite(canvas.convert("RGBA"), draw_caption(texts, act, st, a_s, 1.0, emo))
+    if st["logo"] and os.path.exists(LOGO):
+        lg = Image.open(LOGO).convert("RGBA")
+        lw = int(1080 * st["logo_size"] / 100)
+        lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
+        m = 48
+        x = m if st["logo_pos"] in ("tl", "bl") else 1080 - lw - m
+        y = m + 40 if st["logo_pos"] in ("tl", "tr") else 1920 - lg.height - m - 120
+        canvas.alpha_composite(lg, (x, y))
     buf = io.BytesIO()
     canvas.convert("RGB").resize((540, 960)).save(buf, "JPEG", quality=85)
     return buf.getvalue()
@@ -1030,8 +1301,7 @@ def run_vod(job):
             name = f"vod-{slug}_{stamp}_{k}.mp4"
             meta = {key: m[key] for key in ("score", "title", "hook", "description", "hashtags", "why")}
             make_clip(src, m["start"], out, name, captions_ready(), reason="vod", channel=f"vod:{slug}",
-                      length=m["end"] - m["start"], words=ai.words_between(words, m["start"], m["end"]),
-                      meta=meta)
+                      length=m["end"] - m["start"], all_words=words, meta=meta)
             job["clips"].append(name)
         set_job(job, stage="done", progress=1)
         log(f"🎬 long video done: {len(moments)} clips from {job.get('title') or job['url']}")
@@ -1146,6 +1416,24 @@ def make_handler(out_dir):
             m = re.fullmatch(r"/clips/([\w.-]+\.mp4)", path)
             if m:
                 return self._video(os.path.join(out_dir, m.group(1)))
+            m = re.fullmatch(r"/sources/([\w.-]+\.mp4)", path)
+            if m:
+                return self._video(os.path.join(src_dir(out_dir), m.group(1)))
+            if path == "/api/clips/detail":
+                from urllib.parse import parse_qs
+                n = (parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "").get("name") or [""])[0]
+                if not re.fullmatch(r"[\w-]+\.mp4", n):
+                    return self._send(400, {"error": "bad name"})
+                sc = read_sidecar(n)
+                sc["editable"] = bool(sc.get("source")) and os.path.exists(os.path.join(src_dir(out_dir), sc["source"]))
+                sc["style"] = clean_style(sc.get("style") or STATE.get("caption_style"))
+                sc.pop("face", None)
+                return self._send(200, sc)
+            if path == "/api/logo":
+                if not os.path.exists(LOGO):
+                    return self._send(404, {"error": "no logo"})
+                with open(LOGO, "rb") as f:
+                    return self._send(200, f.read(), "image/png")
             self._send(404, {"error": "not found"})
 
         def do_POST(self):
@@ -1199,11 +1487,42 @@ def make_handler(out_dir):
             if path == "/api/setup/install":
                 threading.Thread(target=install_pkg, args=(str(body.get("pkg", "")),), daemon=True).start()
                 return self._send(200, {"ok": True})
+            if path == "/api/clips/edit":
+                n = str(body.get("name", ""))
+                if not re.fullmatch(r"[\w-]+\.mp4", n) or not os.path.exists(os.path.join(out_dir, n)):
+                    return self._send(400, {"error": "clip not found"})
+                msg = edit_clip(n, body)
+                return self._send(200, {"ok": True, "note": msg or ""})
+            if path == "/api/logo":
+                import base64
+                data = str(body.get("data", ""))
+                if body.get("remove"):
+                    if os.path.exists(LOGO):
+                        os.remove(LOGO)
+                    STATE["has_logo"] = False
+                    return self._send(200, {"ok": True})
+                m = re.match(r"data:image/(png|jpeg|jpg|webp);base64,(.+)", data, re.S)
+                if not m:
+                    return self._send(400, {"error": "Use a PNG or JPG image"})
+                raw = base64.b64decode(m.group(2))
+                if len(raw) > 8_000_000:
+                    return self._send(400, {"error": "Image is too big (max 8 MB)"})
+                os.makedirs(os.path.dirname(LOGO), exist_ok=True)
+                tmp = LOGO + ".in"
+                with open(tmp, "wb") as f:
+                    f.write(raw)
+                from PIL import Image
+                im = Image.open(tmp).convert("RGBA")
+                im.thumbnail((800, 800))
+                im.save(LOGO)
+                os.remove(tmp)
+                STATE["has_logo"] = True
+                return self._send(200, {"ok": True})
             if path == "/api/clips/delete":
                 n = str(body.get("name", ""))
                 if re.fullmatch(r"[\w-]+\.mp4", n):
-                    for ext in (".mp4", ".json"):
-                        fp = os.path.join(out_dir, n.replace(".mp4", ext))
+                    for fp in (os.path.join(out_dir, n), os.path.join(out_dir, n.replace(".mp4", ".json")),
+                               os.path.join(src_dir(out_dir), n)):
                         if os.path.exists(fp):
                             os.remove(fp)
                     with STATE_LOCK:
@@ -1281,7 +1600,7 @@ def load_existing(out_dir):
                     "channel": re.sub(r"^(kick|youtube)-", r"\1:", m.group(1)) if m else ""}
             try:
                 with open(fp.replace(".mp4", ".json")) as j:
-                    clip.update(json.load(j))
+                    clip.update({k: v for k, v in json.load(j).items() if k not in ("words", "style", "face")})
                     clip["status"] = "ready"
             except (OSError, ValueError):
                 pass
@@ -1406,6 +1725,7 @@ def main():
     except (OSError, ValueError):
         STATE["caption_style"] = dict(DEFAULT_STYLE)
     STATE["fonts"] = list(FONT_FILES)
+    STATE["has_logo"] = os.path.exists(LOGO)
     try:
         with open(os.path.join(a.out, ".clip_settings.json")) as f:
             CLIP_CFG.update({k: int(v) for k, v in json.load(f).items() if k in CLIP_CFG})

@@ -6,7 +6,7 @@
 <title>autoclip</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@500;700&family=Luckiest+Guy&family=Montserrat:wght@900&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg:#0b0b0c; --panel:#141416; --panel2:#1b1b1e; --line:#26262a; --line2:#34343a;
@@ -145,6 +145,34 @@
   .empty div b{display:block;font:800 30px var(--display);color:var(--go);margin-bottom:6px}
   .empty div h4{font:700 17px var(--display);margin-bottom:4px}
   .empty div p{color:var(--muted);font-size:15px}
+
+  /* clip editor */
+  .ed{position:fixed;inset:3vh 3vw;background:var(--bg);border:1px solid var(--line2);border-radius:18px;z-index:22;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,1fr);
+    overflow:hidden;opacity:0;pointer-events:none;transform:scale(.985);transition:opacity .18s ease,transform .18s ease}
+  .ed.open{opacity:1;pointer-events:auto;transform:none}
+  .ed .lft{padding:26px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;border-right:1px solid var(--line)}
+  .ed .rgt{padding:26px;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
+  .ed h2{font:800 26px var(--display);letter-spacing:-.02em}
+  .ed video{width:100%;border-radius:12px;background:#000;aspect-ratio:16/9;flex:none}
+  .tl{position:relative;height:56px;flex:none;background:var(--panel);border-radius:10px;border:1px solid var(--line);cursor:pointer;user-select:none}
+  .tl .sel{position:absolute;top:0;bottom:0;background:rgba(212,255,58,.16);border:2px solid var(--go);border-radius:8px}
+  .tl .h{position:absolute;top:-2px;bottom:-2px;width:14px;background:var(--go);border-radius:5px;cursor:ew-resize}
+  .tl .h::after{content:"";position:absolute;left:5px;top:18px;bottom:18px;width:2px;background:var(--bg);border-radius:1px}
+  .tl .ph{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--text);pointer-events:none}
+  .tl .wd{position:absolute;bottom:6px;height:6px;border-radius:2px;background:var(--line2)}
+  .trimrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px;color:var(--muted)}
+  .trimrow b{color:var(--text);font-family:var(--mono);font-weight:500}
+  .lines{display:grid;gap:6px;max-height:42vh;overflow-y:auto;padding-right:4px}
+  .ln{display:grid;grid-template-columns:52px 1fr;gap:8px;align-items:center}
+  .ln span{font:12px var(--mono);color:var(--muted);cursor:pointer} .ln span:hover{color:var(--go)}
+  .ln input{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font:15px var(--display)}
+  .ln input:focus{outline:none;border-color:var(--go)}
+  .fld{display:grid;gap:6px;font-size:14px;color:var(--muted)}
+  .fld input,.fld textarea{background:var(--panel);border:1px solid var(--line2);color:var(--text);border-radius:10px;padding:10px 12px;font:15px var(--display);resize:vertical}
+  .fld input:focus,.fld textarea:focus{outline:none;border-color:var(--go)}
+  .ed .foot{margin-top:auto;display:flex;gap:10px;padding-top:12px}
+  .ed .foot .btn{flex:1;padding:13px}
+  .warnbox{font-size:14px;color:var(--warn);background:rgba(255,176,32,.08);border:1px solid rgba(255,176,32,.3);border-radius:10px;padding:10px 12px}
 
   /* settings drawer */
   .scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:20}
@@ -290,6 +318,18 @@
     <div class="opt"><span class="lbl">Wait between auto-clips</span>
       <div class="seg pick" id="cfgCool"><button data-v="30">30s</button><button data-v="60">1 min</button><button data-v="120">2 min</button><button data-v="300">5 min</button></div></div>
 
+    <h3>Your logo</h3>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <img id="logoImg" alt="" style="height:48px;max-width:120px;object-fit:contain;background:var(--panel);border-radius:8px;padding:4px" class="hidden">
+      <label class="btn sm" style="cursor:pointer">Upload logo<input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden></label>
+      <button class="btn sm hidden" id="logoDel">Remove</button>
+      <label class="tg" style="gap:10px">On every new clip<input type="checkbox" id="logoOn"></label>
+    </div>
+    <div class="f2" style="margin-top:12px">
+      <label>Position<select id="logoPos"><option value="tr">Top right</option><option value="tl">Top left</option><option value="br">Bottom right</option><option value="bl">Bottom left</option></select></label>
+      <label>Size<input type="range" id="logoSize" min="8" max="40"></label>
+    </div>
+
     <h3>Caption style</h3>
     <div class="tiles" id="styles"></div>
 
@@ -311,6 +351,8 @@
         <label>Text color<div class="sw" id="color"></div></label>
         <label>Spoken word color<div class="sw" id="hi"></div></label>
         <label>Outline<input type="range" id="outline" min="0" max="16"></label>
+        <label>Animation<select id="anim"><option value="none">None</option><option value="bounce">Bounce (spoken word)</option><option value="zoom">Zoom in (each line)</option></select></label>
+        <label class="tg" style="align-self:end">Emoji above words<input type="checkbox" id="emoji"></label>
         <div style="display:grid;gap:10px">
           <label class="tg">CAPITAL LETTERS<input type="checkbox" id="upper"></label>
           <label class="tg">Make spoken word bigger<input type="checkbox" id="pop"></label>
@@ -337,6 +379,31 @@
     </details>
   </div>
 </aside>
+
+<section class="ed" id="ed" aria-label="Edit clip">
+  <button class="x" id="edClose" aria-label="Close">×</button>
+  <div class="lft">
+    <h2>Edit clip</h2>
+    <video id="edVid" controls playsinline preload="auto"></video>
+    <div class="tl" id="tl"><div class="sel" id="tlSel"></div><div class="h" id="tlA"></div><div class="h" id="tlB"></div><div class="ph" id="tlPh"></div></div>
+    <div class="trimrow">Clip: <b id="trA">0:00.0</b> → <b id="trB">0:00.0</b> · <b id="trLen">0s</b>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn sm" id="setA">Start here</button><button class="btn sm" id="setB">End here</button><button class="btn sm solid" id="playSel">▶ Play clip</button></span></div>
+    <div class="warnbox hidden" id="edOld"></div>
+    <h3 style="font:700 17px var(--display);margin-top:6px">Captions <span style="font-weight:400;color:var(--muted);font-size:14px">fix any word, click a time to jump there</span></h3>
+    <div class="lines" id="edLines"></div>
+  </div>
+  <div class="rgt">
+    <label class="fld">Title<input id="edTitle" maxlength="100"></label>
+    <label class="fld">Caption for the post<textarea id="edDesc" rows="3"></textarea></label>
+    <label class="fld">Hashtags<input id="edTags" placeholder="gta6 gaming shorts"></label>
+    <div class="fld">Caption style<select id="edStyle"></select></div>
+    <div class="fld">Layout<div class="seg pick" id="edLayout"><button data-l="blur">Full video</button><button data-l="split">Facecam on top</button><button data-l="fill">Zoomed in</button></div></div>
+    <label class="tg" id="edLogoRow">Add my logo<input type="checkbox" id="edLogo"></label>
+    <p class="sub" id="edLogoHint" style="font-size:13px;color:var(--muted)">Upload your logo in Settings first.</p>
+    <div class="foot"><button class="btn" id="edCancel">Cancel</button><button class="btn solid" id="edSave">Save & re-make clip</button></div>
+  </div>
+</section>
 
 <div class="toast" id="toast"></div>
 
@@ -518,7 +585,7 @@ function renderJobs(){
 $("jobs").onclick = e => { const id = e.target.dataset.cancel; if (id) api("/api/vod/cancel", {id}).then(() => toast("Cancelling…")); };
 
 /* ---------- clips ---------- */
-const STEP = {cutting:"Cutting the clip…", transcribing:"Writing captions…", scoring:"Writing a title…", rendering:"Finishing up…", captioning:"Writing captions…"};
+const STEP = {cutting:"Cutting the clip…", rendering:"Making your edit…", transcribing:"Writing captions…", scoring:"Writing a title…", rendering:"Finishing up…", captioning:"Writing captions…"};
 const label = sc => sc >= 80 ? ["great", "🔥 " + sc + " · Great"] : sc >= 60 ? ["good", sc + " · Good"] : ["ok", sc + " · OK"];
 const postText = c => [c.title, c.description, (c.hashtags || []).map(t => "#" + t).join(" ")].filter(Boolean).join("\n\n");
 function source(c){
@@ -534,20 +601,20 @@ function renderClips(){
   const grid = $("grid");
   [...grid.children].forEach(el => { if (!all.some(c => "c-" + c.name === el.id)) el.remove(); });
   clips.forEach((c, i) => {
-    const key = [c.status, c.score, c.title, c.note].join("|");
+    const key = [c.status, c.score, c.title, c.note, c.version].join("|");
     let el = document.getElementById("c-" + c.name);
     if (!el || cache[c.name] !== key){
       cache[c.name] = key;
       const ok = c.status === "ready", bad = c.status === "failed";
       const [bc, bt] = c.score != null ? label(c.score) : [null, null];
       const html = `<div class="frame">
-          ${ok ? `<video src="/clips/${c.name}" preload="metadata" controls playsinline></video>`
+          ${ok ? `<video src="/clips/${c.name}?v=${c.version || 0}" preload="metadata" controls playsinline></video>`
                : `<div class="busy ${bad ? "bad" : ""}">${bad ? "This clip failed" : `<div class="spin"></div>${STEP[c.status] || "Working…"}`}</div>`}
           ${bc ? `<span class="badge ${bc}">${bt}</span>` : ""}</div>
         ${c.title ? `<div class="ttl">${esc(c.title)}</div>` : ok ? `<div class="ttl" style="color:var(--muted)">Clip from ${esc(source(c))}</div>` : ""}
         <div class="sub"><span class="when">${ago(c.created)}</span> · ${esc(source(c))}${c.reason === "manual" ? " · clipped by you" : c.reason === "spike" ? " · chat went wild" : ""}</div>
         ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
-        ${ok ? `<div class="row"><a class="btn sm solid" href="/clips/${c.name}" download>Download</a>
+        ${ok ? `<div class="row"><a class="btn sm solid" href="/clips/${c.name}?v=${c.version || 0}" download="${c.name}">Download</a><button class="btn sm" data-edit="${c.name}">Edit</button>
           ${c.title ? `<button class="btn sm" data-copy="${c.name}">Copy caption</button>` : ""}
           <button class="btn sm del" data-del="${c.name}" title="Delete" aria-label="Delete clip">🗑</button></div>` : ""}`;
       if (!el){ el = document.createElement("div"); el.className = "card"; el.id = "c-" + c.name; }
@@ -557,7 +624,8 @@ function renderClips(){
   });
 }
 $("grid").onclick = async e => {
-  const cp = e.target.dataset.copy, del = e.target.dataset.del;
+  const cp = e.target.dataset.copy, del = e.target.dataset.del, ed = e.target.dataset.edit;
+  if (ed) return openEditor(ed);
   if (cp){ const c = S.clips.find(x => x.name === cp);
     try { await navigator.clipboard.writeText(postText(c)); toast("Title, caption and hashtags copied"); } catch(_) { toast("Couldn't copy"); } }
   if (del && confirm("Delete this clip?")){ await api("/api/clips/delete", {name: del}); delete cache[del]; poll(); }
@@ -567,14 +635,15 @@ $("sort").onclick = e => { const v = e.target.dataset.s; if (!v) return; sortBy 
 
 /* ---------- settings ---------- */
 const COLORS = ["#FFFFFF", "#D4FF3A", "#FFD400", "#FF3B2F", "#3AE0FF", "#B18CFF"];
-const STYLE_INFO = {bold:"Big white words", karaoke:"Spoken word lights up", pop:"Spoken word pops", box:"Clean, dark box", minimal:"Small and calm"};
+const STYLE_INFO = {hype:"Bouncy words + emoji", punchy:"Words zoom in", bold:"Big white words", karaoke:"Spoken word lights up", pop:"Spoken word pops", box:"Clean, dark box", minimal:"Small and calm"};
+const TILE_FONT = {"Luckiest Guy":"'Luckiest Guy',Impact,sans-serif", "Montserrat":"'Montserrat',Arial Black,sans-serif"};
 let pvT = null, saveT = null, inited = false;
 function initSettings(){
   if (inited || !S.caption_style || !S.caption_style.font) return; inited = true; style = {...S.caption_style};
   const P = S.presets;
   $("styles").innerHTML = Object.entries(P).map(([k, p]) => `<button class="tile" data-p="${k}">
-      <div class="demo" style="${p.box ? "background:#000;border-radius:6px;padding:0 8px;" : ""}${p.font === "Helvetica" || p.font === "Rounded" ? "font-family:Helvetica,Arial,sans-serif;font-weight:700;" : ""}${p.outline ? "-webkit-text-stroke:1px #000;paint-order:stroke fill;" : ""}">
-        <span style="color:${p.color}">${p.uppercase ? "NO" : "no"}</span><span style="color:${p.highlight};${p.pop ? "font-size:22px" : ""}">${p.uppercase ? "WAY" : "way"}</span></div>
+      <div class="demo" style="${p.box ? "background:#000;border-radius:6px;padding:0 8px;" : ""}${p.font === "Helvetica" || p.font === "Rounded" ? "font-family:Helvetica,Arial,sans-serif;font-weight:700;" : TILE_FONT[p.font] ? "font-family:" + TILE_FONT[p.font] + ";" : ""}${p.outline ? "-webkit-text-stroke:1px #000;paint-order:stroke fill;" : ""}">
+        ${p.emoji ? "<span style='font-size:15px'>😱</span>" : ""}<span style="color:${p.color}">${p.uppercase ? "NO" : "no"}</span><span style="color:${p.highlight};${p.pop || p.animation === "bounce" ? "font-size:21px" : ""}">${p.uppercase ? "WAY" : "way"}</span></div>
       <div class="nm">${k[0].toUpperCase() + k.slice(1)}</div><div class="ds">${STYLE_INFO[k] || ""}</div></button>`).join("") +
     `<button class="tile" data-p="off"><div class="demo" style="color:var(--dim);font-family:var(--display);font-size:15px">—</div><div class="nm">No captions</div><div class="ds">Just the video</div></button>`;
   $("font").innerHTML = S.fonts.map(f => `<option>${f}</option>`).join("");
@@ -589,7 +658,14 @@ function initSettings(){
   $("font").onchange = e => set({font: e.target.value}, true); $("words").onchange = e => set({words: +e.target.value}, true);
   $("size").oninput = e => set({size: +e.target.value}, true); $("pos").oninput = e => set({position: +e.target.value});
   $("outline").oninput = e => set({outline: +e.target.value}, true);
-  [["upper","uppercase"],["pop","pop"],["box","box"],["shadow","shadow"]].forEach(([id, k]) => $(id).onchange = e => set({[k]: e.target.checked}, true));
+  [["upper","uppercase"],["pop","pop"],["box","box"],["shadow","shadow"],["emoji","emoji"]].forEach(([id, k]) => $(id).onchange = e => set({[k]: e.target.checked}, true));
+  $("anim").onchange = e => set({animation: e.target.value}, true);
+  $("logoOn").onchange = e => { if (e.target.checked && !S.has_logo){ e.target.checked = false; return toast("Upload a logo first"); } set({logo: e.target.checked}); };
+  $("logoPos").onchange = e => set({logo_pos: e.target.value}); $("logoSize").oninput = e => set({logo_size: +e.target.value});
+  $("logoFile").onchange = e => { const f = e.target.files[0]; if (!f) return; const rd = new FileReader();
+    rd.onload = async () => { try { await api("/api/logo", {data: rd.result}); S.has_logo = true; set({logo: true}); toast("Logo saved"); syncLogo(); } catch(err){ toast(err.message); } };
+    rd.readAsDataURL(f); };
+  $("logoDel").onclick = async () => { await api("/api/logo", {remove: true}); S.has_logo = false; set({logo: false}); syncLogo(); };
   sync();
 }
 function set(patch, custom){ style = {...style, ...patch}; if (custom) style.preset = "custom"; sync(); clearTimeout(pvT); pvT = setTimeout(preview, 160);
@@ -599,9 +675,15 @@ function sync(){
   document.querySelectorAll("#layouts .tile").forEach(b => b.classList.toggle("sel", b.dataset.l === style.layout));
   $("font").value = style.font; $("words").value = style.words; $("size").value = style.size; $("pos").value = style.position; $("outline").value = style.outline;
   $("upper").checked = style.uppercase; $("pop").checked = style.pop; $("box").checked = style.box; $("shadow").checked = style.shadow;
+  $("emoji").checked = !!style.emoji; $("anim").value = style.animation || "none";
+  $("logoOn").checked = !!style.logo; $("logoPos").value = style.logo_pos || "tr"; $("logoSize").value = style.logo_size || 18; syncLogo();
   document.querySelectorAll("#color button").forEach(b => b.classList.toggle("sel", b.dataset.c.toLowerCase() === style.color.toLowerCase()));
   document.querySelectorAll("#hi button").forEach(b => b.classList.toggle("sel", b.dataset.c.toLowerCase() === style.highlight.toLowerCase()));
   if (S) renderSetup();
+}
+function syncLogo(){
+  $("logoImg").classList.toggle("hidden", !S.has_logo); $("logoDel").classList.toggle("hidden", !S.has_logo);
+  if (S.has_logo && !$("logoImg").src.includes("t=" + (S._logoT || 0))){ S._logoT = Date.now(); $("logoImg").src = "/api/logo?t=" + S._logoT; }
 }
 function preview(){
   const img = $("pv"), ch = Object.keys(S.channels || {})[0] || "";
@@ -613,8 +695,8 @@ function preview(){
 }
 function openSet(){ if (!style) return; $("drawer").classList.add("open"); $("scrim").classList.add("open"); preview(); }
 function closeSet(){ $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); }
-$("openSet").onclick = openSet; $("closeSet").onclick = closeSet; $("scrim").onclick = closeSet;
-addEventListener("keydown", e => { if (e.key === "Escape") closeSet(); });
+$("openSet").onclick = openSet; $("closeSet").onclick = closeSet; $("scrim").onclick = () => { closeSet(); if (E) closeEditor(); };
+addEventListener("keydown", e => { if (e.key === "Escape"){ closeSet(); if (E) closeEditor(); } });
 
 function renderCfg(){
   const cfg = S.clip_cfg || {};
@@ -635,6 +717,80 @@ $("testAi").onclick = async () => {
     r.classList.remove("hidden");
   } catch(e){ r.textContent = e.message; r.classList.remove("hidden"); }
   $("testAi").textContent = "Test AI now";
+};
+
+/* ---------- clip editor ---------- */
+let E = null;
+const fmtT = s => { s = Math.max(0, s); return Math.floor(s/60) + ":" + (s%60).toFixed(1).padStart(4, "0"); };
+async function openEditor(name){
+  const d = await (await fetch("/api/clips/detail?name=" + encodeURIComponent(name))).json();
+  E = {name, d, trim: [...(d.trim || [0, d.length || 30])], len: d.src_len || d.length || 30, words: (d.words || []).map(w => ({...w})),
+       style: {...d.style}};
+  $("edOld").classList.toggle("hidden", !!d.editable);
+  $("edOld").textContent = "This clip was made before the editor existed, so only its title, caption and hashtags can change.";
+  $("edVid").src = d.editable ? "/sources/" + name : "/clips/" + name;
+  $("tl").style.display = d.editable ? "" : "none"; document.querySelector(".trimrow").style.display = d.editable ? "" : "none";
+  $("edTitle").value = d.title || ""; $("edDesc").value = d.description || ""; $("edTags").value = (d.hashtags || []).join(" ");
+  $("edStyle").innerHTML = Object.keys(S.presets).map(k => `<option value="${k}">${k[0].toUpperCase() + k.slice(1)}</option>`).join("") + `<option value="custom">Custom (from Settings)</option><option value="off">No captions</option>`;
+  $("edStyle").value = E.style.enabled === false ? "off" : (S.presets[E.style.preset] ? E.style.preset : "custom");
+  $("edLogo").checked = !!E.style.logo; $("edLogo").disabled = !S.has_logo; $("edLogoHint").classList.toggle("hidden", !!S.has_logo);
+  syncLayout(); drawTL(); renderLines();
+  $("ed").classList.add("open"); $("scrim").classList.add("open");
+}
+function closeEditor(){ $("ed").classList.remove("open"); $("edVid").pause(); if (!$("drawer").classList.contains("open")) $("scrim").classList.remove("open"); E = null; }
+$("edClose").onclick = closeEditor; $("edCancel").onclick = closeEditor;
+function syncLayout(){ document.querySelectorAll("#edLayout button").forEach(b => b.classList.toggle("sel", b.dataset.l === E.style.layout)); }
+$("edLayout").onclick = e => { const l = e.target.dataset.l; if (l && E){ E.style.layout = l; syncLayout(); } };
+function drawTL(){
+  const tl = $("tl"), L = E.len, [a, b] = E.trim, pct = v => (v / L * 100) + "%";
+  $("tlSel").style.left = pct(a); $("tlSel").style.width = ((b - a) / L * 100) + "%";
+  $("tlA").style.left = `calc(${pct(a)} - 7px)`; $("tlB").style.left = `calc(${pct(b)} - 7px)`;
+  tl.querySelectorAll(".wd").forEach(x => x.remove());
+  E.words.forEach(w => { const m = document.createElement("i"); m.className = "wd"; m.style.left = pct(w.start); m.style.width = Math.max(.3, (w.end - w.start) / L * 100) + "%"; tl.appendChild(m); });
+  $("trA").textContent = fmtT(a); $("trB").textContent = fmtT(b); $("trLen").textContent = (b - a).toFixed(1) + "s";
+}
+function renderLines(){
+  const per = Math.max(1, E.style.words || 3), [a, b] = E.trim;
+  const inside = E.words.map((w, i) => ({w, i})).filter(x => x.w.start >= a - .05 && x.w.end <= b + .05);
+  const groups = []; for (let i = 0; i < inside.length; i += per) groups.push(inside.slice(i, i + per));
+  $("edLines").innerHTML = groups.length ? groups.map((g, k) => `<div class="ln"><span data-t="${g[0].w.start}">${fmtT(g[0].w.start - a)}</span>
+      <input data-g="${k}" value="${esc(g.map(x => x.w.word.trim()).join(" "))}"></div>`).join("")
+    : `<p class="sub" style="color:var(--muted)">No speech in this part of the clip.</p>`;
+  E.groups = groups;
+}
+$("edLines").addEventListener("click", e => { const t = e.target.dataset.t; if (t != null){ $("edVid").currentTime = +t; $("edVid").play(); } });
+$("edLines").addEventListener("change", e => {
+  const k = e.target.dataset.g; if (k == null) return;
+  const g = E.groups[+k], newWords = e.target.value.trim().split(/\s+/).filter(Boolean);
+  const s0 = g[0].w.start, s1 = g[g.length - 1].w.end, step = (s1 - s0) / Math.max(1, newWords.length);
+  const repl = newWords.map((t, j) => ({word: t, start: s0 + j * step, end: s0 + (j + 1) * step - .02}));
+  const idx = g.map(x => x.i); E.words.splice(idx[0], idx.length, ...repl); drawTL(); renderLines();
+});
+let drag = null;
+["tlA", "tlB"].forEach((id, k) => $(id).addEventListener("pointerdown", e => { drag = k; e.target.setPointerCapture(e.pointerId); e.stopPropagation(); }));
+addEventListener("pointermove", e => { if (drag == null || !E) return;
+  const r = $("tl").getBoundingClientRect(), v = Math.min(E.len, Math.max(0, (e.clientX - r.left) / r.width * E.len));
+  if (drag === 0) E.trim[0] = Math.min(v, E.trim[1] - 1); else E.trim[1] = Math.max(v, E.trim[0] + 1);
+  $("edVid").currentTime = E.trim[drag]; drawTL(); });
+addEventListener("pointerup", () => { if (drag != null && E) renderLines(); drag = null; });
+$("tl").addEventListener("click", e => { if (!E) return; const r = $("tl").getBoundingClientRect(); $("edVid").currentTime = (e.clientX - r.left) / r.width * E.len; });
+$("edVid").addEventListener("timeupdate", () => { if (!E) return; const v = $("edVid");
+  $("tlPh").style.left = (v.currentTime / E.len * 100) + "%";
+  if (E.playSel && v.currentTime >= E.trim[1]){ v.pause(); E.playSel = false; } });
+$("setA").onclick = () => { E.trim[0] = Math.min($("edVid").currentTime, E.trim[1] - 1); drawTL(); renderLines(); };
+$("setB").onclick = () => { E.trim[1] = Math.max($("edVid").currentTime, E.trim[0] + 1); drawTL(); renderLines(); };
+$("playSel").onclick = () => { const v = $("edVid"); v.currentTime = E.trim[0]; E.playSel = true; v.play(); };
+$("edSave").onclick = async () => {
+  const sv = $("edStyle").value;
+  let st = {...E.style, logo: $("edLogo").checked};
+  if (sv === "off") st.enabled = false;
+  else if (sv === "custom") st = {...S.caption_style, layout: E.style.layout, logo: st.logo, enabled: true};
+  else st = {...st, ...S.presets[sv], preset: sv, enabled: true};
+  const body = {name: E.name, title: $("edTitle").value, description: $("edDesc").value,
+    hashtags: $("edTags").value.split(/[\s,#]+/).filter(Boolean)};
+  if (E.d.editable) Object.assign(body, {trim: E.trim, words: E.words, style: st});
+  try { const j = await api("/api/clips/edit", body); toast(j.note || "Saved. Re-making the clip…"); closeEditor(); poll(); }
+  catch(err){ toast(err.message); }
 };
 
 function render(){
