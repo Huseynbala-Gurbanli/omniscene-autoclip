@@ -700,7 +700,7 @@ def save_style(st):
 
 CONFIG = os.path.join(os.path.expanduser("~"), ".autoclip", "config.json")
 PIP_PKGS = {"pillow": "PIL", "opencv-python-headless": "cv2", "websocket-client": "websocket",
-            "curl_cffi": "curl_cffi"}
+            "curl_cffi": "curl_cffi", "streamlink": "streamlink", "yt-dlp": "yt_dlp"}
 
 
 def load_config():
@@ -1150,6 +1150,44 @@ def load_existing(out_dir):
             STATE["clips"].insert(0, clip)
 
 
+# ---------------------------------------------------------------- zero-setup bootstrap
+
+def bootstrap():
+    """Everything installs itself: a private Python environment (.venv) with all parts,
+    and ffmpeg via Homebrew if it's missing. First run takes about a minute, later runs are instant."""
+    if os.environ.get("AUTOCLIP_NO_VENV"):
+        return
+    if not in_venv():
+        if not os.path.exists(VENV_PY):
+            print("\n  First run: setting autoclip up for you (one time, about a minute)...\n", flush=True)
+            r = subprocess.run([sys.executable, "-m", "venv", VENV], capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"  Couldn't create the environment ({_pip_error(r)}). Continuing without it.", flush=True)
+                return
+        os.execv(VENV_PY, [VENV_PY, os.path.abspath(__file__), *sys.argv[1:]])
+    # inside the private environment: its tools (streamlink, yt-dlp) come first on PATH
+    os.environ["PATH"] = os.path.dirname(VENV_PY) + os.pathsep + os.environ.get("PATH", "")
+    missing = [pkg for pkg, mod in PIP_PKGS.items() if not has_module(mod)]
+    if missing:
+        print(f"  Installing parts: {', '.join(missing)} ...", flush=True)
+        pip = [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check"]
+        r = subprocess.run([*pip, *missing], capture_output=True, text=True)
+        if r.returncode != 0:                       # one bad package shouldn't block the rest
+            for pkg in missing:
+                r1 = subprocess.run([*pip, pkg], capture_output=True, text=True)
+                if r1.returncode != 0:
+                    print(f"  ! couldn't install {pkg}: {_pip_error(r1)}", flush=True)
+        print("  Parts ready.", flush=True)
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        brew = shutil.which("brew") or next((b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+                                             if os.path.exists(b)), None)
+        if brew:
+            print("  Installing ffmpeg with Homebrew (one time, a few minutes)...", flush=True)
+            subprocess.run([brew, "install", "ffmpeg"])
+        else:
+            print("  ! ffmpeg is missing. Install Homebrew (https://brew.sh), then run: brew install ffmpeg", flush=True)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -1160,8 +1198,7 @@ def main():
     p.add_argument("--port", type=int, default=8787)
     p.add_argument("--no-browser", action="store_true")
     a = p.parse_args()
-    if not in_venv() and os.path.exists(VENV_PY) and not os.environ.get("AUTOCLIP_NO_VENV"):
-        os.execv(VENV_PY, [VENV_PY, os.path.abspath(__file__), *sys.argv[1:]])   # use the private env
+    bootstrap()
     CTX["args"] = a
 
     os.makedirs(a.out, exist_ok=True)
@@ -1173,7 +1210,7 @@ def main():
     if not setup["groq"]:
         log("No Groq key yet - add it in the dashboard (Settings) to turn on captions + AI titles")
     if not setup["pillow"]:
-        log("Pillow (caption engine) missing - click 'Install it now' in the dashboard")
+        log("Caption engine (Pillow) is missing - stop autoclip (Ctrl+C) and start it again to finish setup")
     try:
         with open(os.path.join(a.out, ".caption_style.json")) as f:
             STATE["caption_style"] = clean_style(json.load(f))

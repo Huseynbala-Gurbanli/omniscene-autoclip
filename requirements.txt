@@ -1,0 +1,7 @@
+# installed automatically into .venv on first run - you don't need to do anything
+pillow
+opencv-python-headless
+websocket-client
+curl_cffi
+streamlink
+yt-dlp

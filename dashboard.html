@@ -230,10 +230,8 @@
     <div class="err hidden" id="keyErr"></div>
   </section>
   <section class="setup hidden" id="setupPil">
-    <h3>One more step for captions</h3>
-    <p>The caption engine (Pillow) isn't installed for this Python yet.</p>
-    <div class="row"><button class="btn solid" data-fix="pillow" id="fixPil">Install it now</button></div>
-    <div class="err hidden" id="pilErr"></div>
+    <h3>Setup didn't finish</h3>
+    <p>Stop autoclip in Terminal (Ctrl+C) and start it again with <b>python3 autoclip.py</b> — it finishes setting itself up.</p>
   </section>
 
   <section class="block hidden" id="liveBlock">
@@ -278,7 +276,7 @@
       <button class="tile" data-l="split"><span class="lay"><i style="top:0;height:40%;background:var(--go)"></i><i style="top:42%;bottom:0"></i></span><div class="nm">Facecam on top</div><div class="ds">Streamer above, game below</div></button>
       <button class="tile" data-l="fill"><span class="lay"><i style="top:0;bottom:0"></i></span><div class="nm">Zoomed in</div><div class="ds">Crop the middle</div></button>
     </div>
-    <p class="no hidden" id="faceNote" style="font-size:14px;margin-top:10px">Facecam needs face detection. <button class="btn sm" data-fix="opencv-python-headless">Install it</button></p>
+    <p class="no hidden" id="faceNote" style="font-size:14px;margin-top:10px">Facecam detection isn't ready yet: restart autoclip and it sets it up.</p>
 
     <details>
       <summary>More caption options</summary>
@@ -345,20 +343,16 @@ function renderSetup(){
   $("pillTxt").textContent = ready ? "Captions on" : !st.groq ? "Captions off · add key" : "Captions off · 1 step left";
   $("setupKey").classList.toggle("hidden", !!st.groq);
   $("setupPil").classList.toggle("hidden", !st.groq || !!st.pillow);
-  $("pilErr").textContent = st.error ? st.error + " — copy this message to Claude if it keeps failing." : "";
-  $("pilErr").classList.toggle("hidden", !st.error);
-  $("fixPil").textContent = st.restarting ? "Restarting…" : st.installing === "pillow" ? "Installing… (about a minute)" : "Install it now";
   const items = [
-    ["Groq key (captions + AI titles)", st.groq, st.groq ? "saved" : "missing", null],
-    ["Caption engine (Pillow)", st.pillow, st.pillow ? "installed" : "missing", "pillow"],
-    ["Facecam detection (OpenCV)", st.opencv, st.opencv ? "installed" : "optional", "opencv-python-headless"],
-    ["Stream recorder (streamlink)", st.streamlink, st.streamlink ? "installed" : "run: brew install streamlink", null],
-    ["Video tools (ffmpeg)", st.ffmpeg, st.ffmpeg ? "installed" : "run: brew install ffmpeg", null],
-    ["YouTube + videos (yt-dlp)", st.yt_dlp, st.yt_dlp ? "installed" : "run: brew install yt-dlp", null],
-    ["Kick chat", st.websocket, st.websocket ? "installed" : "optional", "websocket-client"],
+    ["Groq key (captions + AI titles)", st.groq, st.groq ? "saved" : "paste it above"],
+    ["Captions", st.pillow, st.pillow ? "ready" : "restart autoclip"],
+    ["Facecam detection", st.opencv, st.opencv ? "ready" : "restart autoclip"],
+    ["Live stream recorder", st.streamlink, st.streamlink ? "ready" : "restart autoclip"],
+    ["Video tools (ffmpeg)", st.ffmpeg, st.ffmpeg ? "ready" : "restart autoclip"],
+    ["YouTube + videos", st.yt_dlp, st.yt_dlp ? "ready" : "restart autoclip"],
+    ["Kick chat", st.websocket, st.websocket ? "ready" : "restart autoclip"],
   ];
-  $("check").innerHTML = items.map(([n, ok, m, fix]) => `<div><span class="${ok ? "ok" : "no"}">${ok ? "✓" : "•"}</span>${n}
-    <span class="m">${!ok && fix ? `<button class="btn sm" data-fix="${fix}">${st.installing === fix ? "Installing…" : "Install"}</button>` : esc(m)}</span></div>`).join("");
+  $("check").innerHTML = items.map(([n, ok, m]) => `<div><span class="${ok ? "ok" : "no"}">${ok ? "✓" : "•"}</span>${n}<span class="m">${esc(m)}</span></div>`).join("");
   $("faceNote").classList.toggle("hidden", !(style && style.layout === "split" && !st.opencv));
 }
 document.addEventListener("click", async e => {

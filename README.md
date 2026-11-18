@@ -18,13 +18,13 @@ facecam split layout.
 ## Setup (macOS)
 
 ```bash
-brew install streamlink ffmpeg yt-dlp
 python3 autoclip.py
 ```
 
-That's it. The app opens at http://localhost:8787 and walks you through the rest:
-paste your free Groq key (https://console.groq.com/keys) once, and click **Install** for anything
-missing (Pillow for captions, OpenCV for the facecam layout). The key is stored in
+That's it — nothing to install. The first run sets itself up (about a minute): it creates a
+private environment in `.venv` with everything inside (captions, facecam detection, streamlink,
+yt-dlp, Kick chat) and installs ffmpeg with Homebrew if it's missing. Later runs start instantly.
+Then paste your free Groq key (https://console.groq.com/keys) once in the app; it's stored in
 `~/.autoclip/config.json` on your Mac only.
 
 ## Run
