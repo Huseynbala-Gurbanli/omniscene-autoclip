@@ -25,6 +25,9 @@ Platforms:
   (without these the channel still records; clip with the C button)
 """
 import argparse, json, os, re, shutil, socket, subprocess, threading, time, webbrowser
+
+import ai
+import layout
 from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,7 +42,7 @@ COOLDOWN = 60        # min seconds between clips
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = {"captions": False, "settings": {}, "channels": {}, "clips": [], "log": [],
-         "caption_style": {}, "fonts": [], "presets": {}}
+         "caption_style": {}, "fonts": [], "presets": {}, "jobs": [], "ai": False}
 STATE_LOCK = threading.Lock()
 CHANNELS = {}      # name -> Channel
 CTX = {}           # out dir, captions flag
@@ -335,47 +338,68 @@ def set_clip(name, **kw):
         STATE["clips"].insert(0, {"name": name, **kw})
 
 
-def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, channel=""):
+def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, channel="",
+              length=None, words=None, meta=None, context=""):
+    """Cut -> transcribe -> AI score -> layout -> captions -> final 9:16 mp4 (+ .json sidecar)."""
+    length = length or CLIP_LEN
     raw = os.path.join(out_dir, name.replace(".mp4", "_raw.mp4"))
     final = os.path.join(out_dir, name)
+    capdir = raw.replace(".mp4", "_caps")
+    st = clean_style(STATE.get("caption_style"))
     set_clip(name, status="cutting", reason=reason, peak=peak, created=time.time(), caption="",
              channel=channel)
     try:
-        start = max(0, start)
-        # 1) cut
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(start), "-i", src,
-                        "-t", str(CLIP_LEN), "-c", "copy", "-avoid_negative_ts", "make_zero", raw],
-                       check=True)
-        # 2) captions
-        sub_filter, words = "", []
-        capdir = raw.replace(".mp4", "_caps")
-        if captions and STATE.get("caption_style", {}).get("enabled", True):
-            set_clip(name, status="captioning")
+        start = max(0.0, float(start))
+        # 1) frame-accurate cut (re-encode, fast) so word timings line up exactly
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.3f}", "-i", src,
+                        "-t", f"{length:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "16",
+                        "-c:a", "aac", "-b:a", "192k", raw], check=True)
+        # 2) transcript
+        if words is None:
+            words = []
+            if ai.has_key():
+                set_clip(name, status="transcribing")
+                try:
+                    words = ai.transcribe(raw)
+                except Exception as e:
+                    log(f"transcription failed ({e})")
+        text = " ".join(w["word"].strip() for w in words)
+        # 3) AI score / title / hashtags
+        if meta is None and ai.has_key():
+            set_clip(name, status="scoring")
             try:
-                words = groq_words(raw)
+                meta = ai.score_clip(text, context or f"{channel} livestream, clipped because: {reason}"
+                                     + (f" (chat spiked to {peak} msgs/10s)" if peak else ""))
             except Exception as e:
-                log(f"captions failed ({e}) -> clip without captions")
-        # 3) 9:16 vertical: blurred background + full gameplay in the middle
-        set_clip(name, status="rendering")
-        vf = ("[0:v]setpts=PTS-STARTPTS,split[a][b];"
-              "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];"
-              "[b]scale=1080:-2[fg];"
-              "[bg][fg]overlay=(W-w)/2:(H-h)/2")
+                log(f"AI scoring failed ({e})")
+        meta = meta or {}
+        # 4) layout
+        set_clip(name, status="rendering", **meta)
+        sw, sh = layout.probe_size(raw)
+        face = layout.detect_facecam(raw) if st["layout"] == "split" else None
+        if st["layout"] == "split" and not face:
+            log(f"{name}: no facecam found -> blur layout")
+        vf, used = layout.build_filter(st["layout"], sw, sh, face)
+        # 5) captions (transparent PNG track -> no libass needed)
         inputs = ["-i", raw]
-        if words:
-            # captions = transparent PNGs played as a 2nd video track -> needs no libass/drawtext
-            playlist = render_captions(words, capdir, STATE.get("caption_style"))
+        if words and captions and st["enabled"]:
+            playlist = render_captions(words, capdir, st)
             inputs += ["-f", "concat", "-safe", "0", "-i", playlist]
-            vf += "[base];[base][1:v]overlay=0:0:eof_action=repeat"
-        vf += "[v]"
+            vf += ";[base][1:v]overlay=0:0:eof_action=repeat[v]"
+        else:
+            vf += ";[base]null[v]"
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", vf,
-                        "-map", "[v]", "-map", "0:a?", "-t", str(CLIP_LEN), "-c:v", "libx264",
+                        "-map", "[v]", "-map", "0:a?", "-t", f"{length:.3f}", "-c:v", "libx264",
                         "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", final],
                        check=True)
-        set_clip(name, status="ready", size=os.path.getsize(final),
-                 caption=" ".join(w["word"].strip() for w in words)[:140])
-        log(f"✅ saved {final}")
+        info = {"status": "ready", "size": os.path.getsize(final), "caption": text[:140],
+                "transcript": text[:4000], "layout": used, "length": round(length, 1), **meta}
+        set_clip(name, **info)
+        with open(final.replace(".mp4", ".json"), "w") as f:
+            json.dump({"reason": reason, "peak": peak, "channel": channel, **info}, f)
+        log(f"✅ saved {final}" + (f"  · score {meta['score']} · {meta.get('title', '')}" if meta.get("score") is not None else ""))
     except Exception as e:
         set_clip(name, status="failed")
         log(f"clip failed: {e}")
@@ -383,23 +407,6 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
         if os.path.exists(raw):
             os.remove(raw)
         shutil.rmtree(capdir, ignore_errors=True)
-
-
-def groq_words(video):
-    """Send the clip's audio to Groq Whisper, get word timestamps back."""
-    mp3 = video.replace(".mp4", ".mp3")
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", video, "-vn",
-                    "-ac", "1", "-ar", "16000", "-b:a", "48k", mp3], check=True)
-    r = subprocess.run(
-        ["curl", "-sS", "--fail-with-body", "https://api.groq.com/openai/v1/audio/transcriptions",
-         "-H", f"Authorization: Bearer {os.environ['GROQ_API_KEY']}",
-         "-F", f"file=@{mp3}", "-F", "model=whisper-large-v3-turbo",
-         "-F", "response_format=verbose_json", "-F", "timestamp_granularities[]=word"],
-        capture_output=True, text=True)
-    os.remove(mp3)
-    if r.returncode != 0:
-        raise RuntimeError(r.stdout or r.stderr)
-    return json.loads(r.stdout).get("words", [])
 
 
 # ---------------------------------------------------------------- caption studio
@@ -430,7 +437,7 @@ PRESETS = {
     "minimal": {"font": "Rounded", "size": 70, "uppercase": False, "words": 5, "color": "#FFFFFF",
                 "highlight": "#FFFFFF", "outline": 0, "box": False, "shadow": True, "pop": False},
 }
-DEFAULT_STYLE = {"enabled": True, "preset": "karaoke", "position": 75, **PRESETS["karaoke"]}
+DEFAULT_STYLE = {"enabled": True, "preset": "karaoke", "position": 75, "layout": "blur", **PRESETS["karaoke"]}
 _font_cache = {}
 
 
@@ -465,6 +472,8 @@ def clean_style(st):
     for k in ("color", "highlight"):
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(out[k])):
             out[k] = DEFAULT_STYLE[k]
+    if out["layout"] not in ("blur", "split", "fill"):
+        out["layout"] = "blur"
     if out["font"] not in FONT_FILES:
         out["font"] = DEFAULT_STYLE["font"]
     return out
@@ -586,29 +595,51 @@ def render_captions(words, outdir, style=None):
 SAMPLE = [{"word": w} for w in "NO WAY HE JUST STOLE THE TRUCK".split()]
 
 
+_face_cache = {}
+
+
 def caption_preview(style, channel=None):
-    """1080x1920 JPEG: the vertical layout with a real stream frame when available."""
-    from PIL import Image, ImageFilter, ImageDraw
+    """540x960 JPEG of the real vertical layout + captions (stream frame when available)."""
+    from PIL import Image, ImageDraw
     import io
     st = clean_style(style)
-    frame = None
+    frame, face = None, None
     ch = CHANNELS.get(channel or "")
     if ch and os.path.exists(ch.rec) and os.path.getsize(ch.rec) > 2_000_000:
         jpg = os.path.join(CTX["out"], f".preview_{ch.file_id}.jpg")
+        d = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                            "csv=p=0", ch.rec], capture_output=True, text=True, timeout=15).stdout.strip()
+        ss = max(0.0, float(d or 0) - 6) if re.fullmatch(r"[\d.]+", d or "") else 3.0
         if not os.path.exists(jpg) or time.time() - os.path.getmtime(jpg) > 60:
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "3", "-i", ch.rec,
-                            "-frames:v", "1", "-vf", "scale=1080:-2", jpg], timeout=20)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{ss:.2f}", "-i", ch.rec,
+                            "-frames:v", "1", jpg], timeout=20)
         if os.path.exists(jpg):
             frame = Image.open(jpg).convert("RGB")
+        if st["layout"] == "split":
+            hit = _face_cache.get(ch.key)
+            if not hit or time.time() - hit[0] > 120:
+                # detect on a small copy of the last 20 s (seeking a huge growing .ts is slow)
+                tail = os.path.join(CTX["out"], f".facecheck_{ch.file_id}.ts")
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(0.0, ss - 14):.2f}",
+                                "-i", ch.rec, "-t", "20", "-c", "copy", tail], timeout=30)
+                _face_cache[ch.key] = hit = (time.time(), layout.detect_facecam(tail, samples=8))
+                if os.path.exists(tail):
+                    os.remove(tail)
+            face = hit[1]
+            if face and frame is not None:      # detection ran on recording pixels; frame may differ
+                sw, _ = layout.probe_size(ch.rec)
+                k = frame.width / sw
+                face = tuple(int(v * k) for v in face)
     if frame is None:
-        frame = Image.new("RGB", (1080, 608), (38, 40, 46))
+        frame = Image.new("RGB", (1920, 1080), (34, 36, 42))
         dd = ImageDraw.Draw(frame)
-        for x in range(0, 1080, 6):
-            dd.line([(x, 0), (x, 608)], fill=(44 + (x * 31 % 23), 47, 55))
-    bg = frame.resize((int(1920 * frame.width / frame.height), 1920)).filter(ImageFilter.GaussianBlur(28))
-    left = (bg.width - 1080) // 2
-    canvas = bg.crop((left, 0, left + 1080, 1920))
-    canvas.paste(frame, (0, (1920 - frame.height) // 2))
+        for x in range(0, 1920, 8):
+            dd.line([(x, 0), (x + 400, 1080)], fill=(40 + (x * 7 % 13), 43, 52), width=3)
+        if st["layout"] == "split":            # fake webcam so the layout is visible
+            dd.rectangle((1500, 40, 1880, 330), fill=(70, 74, 84))
+            dd.ellipse((1640, 110, 1740, 230), fill=(150, 125, 110))
+            face = (1640, 110, 100, 120)
+    canvas = layout.compose_preview(frame, st["layout"], face)
     texts = [w["word"] for w in SAMPLE[:st["words"]]]
     act = min(1, len(texts) - 1) if (st["highlight"].lower() != st["color"].lower() or st["pop"]) else -1
     canvas = Image.alpha_composite(canvas.convert("RGBA"), draw_caption(texts, act, st))
@@ -624,6 +655,112 @@ def save_style(st):
             json.dump(st, f)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------- long video -> best clips
+
+def set_job(job, **kw):
+    with STATE_LOCK:
+        job.update(kw)
+
+
+def run_vod(job):
+    out = CTX["out"]
+    work = os.path.join(out, f".vod_{job['id']}")
+    os.makedirs(work, exist_ok=True)
+    src, downloaded = job["url"], False
+    try:
+        if not ai.has_key():
+            raise RuntimeError("needs GROQ_API_KEY (transcript + AI picking)")
+        # 1) get the video
+        if os.path.isfile(os.path.expanduser(src)):
+            src = os.path.expanduser(src)
+            job_title = os.path.basename(src)
+        else:
+            if not shutil.which("yt-dlp"):
+                raise RuntimeError("yt-dlp missing -> brew install yt-dlp")
+            set_job(job, stage="downloading", progress=0)
+            p = subprocess.Popen(
+                ["yt-dlp", "--newline", "--no-simulate", "--no-playlist",
+                 "--print", "before_dl:TITLE:%(title)s", "--print", "after_move:FILE:%(filepath)s",
+                 "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+                 "--merge-output-format", "mp4", "-o", os.path.join(work, "video.%(ext)s"), src],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            job_title, path, tail = "", "", []
+            for line in p.stdout:
+                line = line.strip()
+                tail = (tail + [line])[-5:]
+                if line.startswith("TITLE:"):
+                    job_title = line[6:]
+                    set_job(job, title=job_title)
+                elif line.startswith("FILE:"):
+                    path = line[5:]
+                elif (m := re.search(r"\[download\]\s+([\d.]+)%", line)):
+                    set_job(job, progress=float(m.group(1)) / 100)
+                if job.get("cancel"):
+                    p.terminate()
+            p.wait()
+            if job.get("cancel"):
+                raise RuntimeError("cancelled")
+            if p.returncode != 0 or not path or not os.path.exists(path):
+                raise RuntimeError("download failed: " + " | ".join(tail)[-200:])
+            src, downloaded = path, True
+        set_job(job, title=job.get("title") or job_title)
+        dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                    "-of", "csv=p=0", src], capture_output=True, text=True).stdout or 0)
+        set_job(job, duration=dur)
+        # 2) transcript
+        set_job(job, stage="transcribing", progress=0)
+        words = ai.transcribe_long(src, os.path.join(work, "audio"),
+                                   lambda d, t: set_job(job, progress=d / max(t, 1)))
+        if job.get("cancel"):
+            raise RuntimeError("cancelled")
+        if len(words) < 30:
+            raise RuntimeError("almost no speech found in this video")
+        # 3) AI picks moments
+        set_job(job, stage="finding moments", progress=0)
+        moments = ai.find_moments(words, count=job["count"], min_len=job["min_len"], max_len=job["max_len"],
+                                  context=f"video titled: {job.get('title') or job_title}",
+                                  progress=lambda d, t: set_job(job, progress=d / max(t, 1)))
+        if not moments:
+            raise RuntimeError("AI found no strong moments")
+        set_job(job, found=len(moments))
+        # 4) render
+        slug = re.sub(r"[^\w-]", "", re.sub(r"\s+", "-", (job.get("title") or "video").lower()))[:24] or "video"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for k, m in enumerate(moments, 1):
+            if job.get("cancel"):
+                raise RuntimeError("cancelled")
+            set_job(job, stage=f"rendering {k}/{len(moments)}", progress=(k - 1) / len(moments))
+            name = f"vod-{slug}_{stamp}_{k}.mp4"
+            meta = {key: m[key] for key in ("score", "title", "hook", "description", "hashtags", "why")}
+            make_clip(src, m["start"], out, name, CTX["captions"], reason="vod", channel=f"vod:{slug}",
+                      length=m["end"] - m["start"], words=ai.words_between(words, m["start"], m["end"]),
+                      meta=meta)
+            job["clips"].append(name)
+        set_job(job, stage="done", progress=1)
+        log(f"🎬 long video done: {len(moments)} clips from {job.get('title') or job['url']}")
+    except Exception as e:
+        set_job(job, stage="failed", error=str(e)[:200])
+        log(f"long video failed: {e}")
+    finally:
+        if downloaded and not job.get("keep"):
+            shutil.rmtree(work, ignore_errors=True)
+        else:
+            shutil.rmtree(os.path.join(work, "audio"), ignore_errors=True)
+
+
+def start_vod(url, count=6, min_len=20, max_len=60):
+    url = (url or "").strip()
+    if not url:
+        return None, "paste a link or a file path"
+    job = {"id": f"{int(time.time() * 1000) % 10**9}", "url": url, "title": "", "stage": "queued",
+           "progress": 0, "count": max(1, min(15, int(count))), "min_len": int(min_len),
+           "max_len": int(max_len), "clips": [], "error": "", "created": time.time()}
+    with STATE_LOCK:
+        STATE["jobs"].insert(0, job)
+    threading.Thread(target=run_vod, args=(job,), daemon=True).start()
+    return job, None
 
 
 # ---------------------------------------------------------------- dashboard server
@@ -694,6 +831,15 @@ def make_handler(out_dir):
                     return self._send(400, {"error": "channel not running"})
                 ch.manual.set()
                 return self._send(200, {"ok": True})
+            if path == "/api/vod":
+                job, err = start_vod(body.get("url"), body.get("count", 6),
+                                     body.get("min_len", 20), body.get("max_len", 60))
+                return self._send(400 if err else 200, {"error": err} if err else {"ok": True, "id": job["id"]})
+            if path == "/api/vod/cancel":
+                for j in STATE["jobs"]:
+                    if j["id"] == str(body.get("id")):
+                        j["cancel"] = True
+                return self._send(200, {"ok": True})
             if path == "/api/caption_style":
                 st = clean_style(body)
                 save_style(st)
@@ -751,11 +897,17 @@ def load_existing(out_dir):
     for f in sorted(os.listdir(out_dir)):
         if re.fullmatch(r"[\w-]+\.mp4", f) and not f.endswith("_raw.mp4"):
             fp = os.path.join(out_dir, f)
-            m = re.match(r"(.+?)_\d{8}_\d{6}\.mp4$", f)
-            STATE["clips"].insert(0, {"name": f, "status": "ready", "reason": "earlier",
-                                      "peak": 0, "created": os.path.getmtime(fp),
-                                      "size": os.path.getsize(fp), "caption": "",
-                                      "channel": re.sub(r"^(kick|youtube)-", r"\1:", m.group(1)) if m else ""})
+            m = re.match(r"(.+?)_\d{8}_\d{6}(?:_\d+)?\.mp4$", f)
+            clip = {"name": f, "status": "ready", "reason": "earlier", "peak": 0,
+                    "created": os.path.getmtime(fp), "size": os.path.getsize(fp), "caption": "",
+                    "channel": re.sub(r"^(kick|youtube)-", r"\1:", m.group(1)) if m else ""}
+            try:
+                with open(fp.replace(".mp4", ".json")) as j:
+                    clip.update(json.load(j))
+                    clip["status"] = "ready"
+            except (OSError, ValueError):
+                pass
+            STATE["clips"].insert(0, clip)
 
 
 # ---------------------------------------------------------------- main
@@ -787,6 +939,12 @@ def main():
     except (OSError, ValueError):
         STATE["caption_style"] = dict(DEFAULT_STYLE)
     STATE["fonts"] = list(FONT_FILES)
+    STATE["ai"] = ai.has_key()
+    try:
+        import cv2  # noqa: F401
+        STATE["facecam"] = True
+    except ImportError:
+        STATE["facecam"] = False
     STATE["presets"] = PRESETS
     STATE.update(captions=captions,
                  settings={"window": WINDOW, "spike_x": SPIKE_X, "min_msgs": MIN_MSGS,

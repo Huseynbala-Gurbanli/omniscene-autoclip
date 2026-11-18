@@ -61,7 +61,7 @@
   .hero-empty .sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
   .hero-empty .sugg button{font:500 12px var(--mono);padding:8px 12px;border:1px solid var(--line2);border-radius:3px;color:var(--muted)}
   .hero-empty .sugg button:hover{color:var(--text);border-color:var(--signal)}
-  .tag-ch{position:absolute;bottom:8px;left:8px;font:500 10px var(--mono);padding:3px 6px;background:rgba(11,11,12,.8);border-radius:2px;color:var(--text)}
+  .tag-ch{position:absolute;top:34px;left:8px;font:500 10px var(--mono);padding:3px 6px;background:rgba(11,11,12,.8);border-radius:2px;color:var(--text)}
   .hidden{display:none!important}
 
   /* ---------- caption studio drawer ---------- */
@@ -109,6 +109,40 @@
   .close:hover{color:var(--text)}
   .note{font:12px var(--mono);color:var(--amber);margin-top:6px}
   @media (max-width:760px){.drawer{grid-template-columns:1fr;overflow-y:auto}.pv{padding:18px}.phone{width:200px}.ctrls{overflow:visible}.presets{grid-template-columns:repeat(3,1fr)}}
+
+  /* ---------- AI clip meta ---------- */
+  .score{position:absolute;top:8px;right:8px;font:800 13px var(--mono);padding:4px 7px;border-radius:2px;background:rgba(11,11,12,.85)}
+  .score.hot{color:var(--bg);background:var(--signal)} .score.mid{color:var(--amber)} .score.low{color:var(--muted)}
+  .ttl{font:700 14px/1.25 var(--display);letter-spacing:-.01em;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .tags{font:11px/1.5 var(--mono);color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .card .acts{display:flex;gap:12px;align-items:center}
+  .card .acts button{font:500 11px var(--mono);color:var(--text);border-bottom:1px solid var(--line2);padding:0}
+  .card .acts button:hover{border-color:var(--signal)}
+  .sortseg{margin-left:auto}
+  .sortseg button{padding:6px 10px;font-size:11px}
+
+  /* ---------- long video ---------- */
+  .vod-btn{display:flex;align-items:center;gap:8px;padding:0 18px;border-left:1px solid var(--line);font:600 12px var(--mono);color:var(--text);white-space:nowrap}
+  .vod-btn:hover{background:var(--panel)} .vod-btn b{color:var(--signal)}
+  .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%) scale(.98);width:min(560px,92vw);background:var(--bg);border:1px solid var(--line2);
+    border-radius:4px;z-index:22;padding:28px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
+  .modal.open{opacity:1;pointer-events:auto;transform:translate(-50%,-50%)}
+  .modal h2{font:800 26px var(--display);letter-spacing:-.02em}
+  .modal p{color:var(--muted);font-size:13px;margin:6px 0 20px}
+  .modal input[type=text]{width:100%;background:var(--panel);border:1px solid var(--line2);color:var(--text);font:13px var(--mono);padding:12px;border-radius:3px}
+  .modal input[type=text]:focus{outline:none;border-color:var(--signal)}
+  .modal .row{display:flex;gap:22px;margin:18px 0 22px;flex-wrap:wrap}
+  .go{width:100%;padding:14px;background:var(--signal);color:var(--bg);font:800 16px var(--display);border-radius:3px}
+  .go:hover{background:var(--text)}
+  .jobs{border-top:1px solid var(--line);padding:20px 28px 4px;display:grid;gap:10px}
+  .job{display:grid;grid-template-columns:minmax(0,1fr) 140px auto;gap:18px;align-items:center;padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:3px}
+  .job .t{font:600 14px var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .job .st{font:11px var(--mono);color:var(--muted);margin-top:3px}
+  .job .st.err{color:var(--rec)} .job .st.ok{color:var(--signal)}
+  .pbar{height:4px;background:var(--line2);overflow:hidden;border-radius:2px}
+  .pbar i{display:block;height:100%;background:var(--amber);transition:width .4s ease}
+  .pbar i.ok{background:var(--signal)} .pbar i.err{background:var(--rec)}
+  .job .x{font:12px var(--mono);color:var(--muted)} .job .x:hover{color:var(--rec)}
 
   /* ---------- main grid ---------- */
   main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:1px;background:var(--line)}
@@ -211,7 +245,8 @@
 </header>
 
 <nav class="chbar" id="chbar">
-  <form class="add" id="addForm" autocomplete="off">
+  <button class="vod-btn" id="openVod" style="margin-left:auto">Long video → <b>clips</b></button>
+  <form class="add" id="addForm" autocomplete="off" style="margin-left:0">
     <input id="addInput" placeholder="xqc · kick.com/x · youtube.com/@x" aria-label="Twitch channel name" spellcheck="false">
     <button type="submit">Add</button>
   </form>
@@ -260,8 +295,11 @@
   </section>
 </main>
 
+<section class="jobs hidden" id="jobs"></section>
+
 <section class="clips">
-  <div class="clips-head"><h2>Clips</h2><span class="label" id="clipsSub">newest first</span></div>
+  <div class="clips-head"><h2>Clips</h2><span class="label" id="clipsSub">newest first</span>
+    <div class="seg sortseg" id="sortSeg"><button data-s="new" class="sel">Newest</button><button data-s="score">Top score</button></div></div>
   <div class="strip" id="strip"></div>
 </section>
 
@@ -282,7 +320,9 @@
     <p class="sub">Applies to every new clip. Saved automatically.</p>
     <div class="ctrl"><label class="toggle"><span class="label" style="margin:0">Captions on new clips</span><input type="checkbox" id="cEnabled"></label>
       <div class="note hidden" id="cKeyNote">No Groq key in this Terminal: set GROQ_API_KEY and restart to get captions.</div></div>
-    <div class="ctrl"><div class="label">Style</div><div class="presets" id="cPresets"></div></div>
+    <div class="ctrl"><div class="label">Layout</div><div class="seg" id="cLayout"><button data-v="blur" title="Full frame, blurred background">Blur</button><button data-v="split" title="Streamer facecam on top, gameplay below">Split · facecam</button><button data-v="fill" title="Crop the center to fill the screen">Fill</button></div>
+      <div class="note hidden" id="cFaceNote">Split needs face detection: pip3 install opencv-python-headless</div></div>
+    <div class="ctrl"><div class="label">Caption style</div><div class="presets" id="cPresets"></div></div>
     <div class="ctrl row2">
       <div><div class="label">Font</div><select id="cFont"></select></div>
       <div><div class="label">Words on screen</div><div class="seg" id="cWords"></div></div>
@@ -306,6 +346,19 @@
     </div>
   </div>
 </aside>
+
+<section class="modal" id="vodModal" aria-label="Long video to clips">
+  <button class="close" id="closeVod" aria-label="Close">×</button>
+  <h2>Long video → best clips</h2>
+  <p>Paste a YouTube / Twitch VOD / Kick VOD link, or a file path on your Mac. AI reads the whole transcript and cuts the strongest moments.</p>
+  <input type="text" id="vodUrl" placeholder="https://www.youtube.com/watch?v=…  or  ~/Movies/stream.mp4" spellcheck="false">
+  <div class="row">
+    <div><div class="label" style="margin-bottom:8px">Clips</div><div class="seg" id="vodCount"><button data-v="3">3</button><button data-v="5" class="sel">5</button><button data-v="8">8</button><button data-v="12">12</button></div></div>
+    <div><div class="label" style="margin-bottom:8px">Length</div><div class="seg" id="vodLen"><button data-v="15-30">15–30s</button><button data-v="20-60" class="sel">20–60s</button><button data-v="45-90">45–90s</button></div></div>
+  </div>
+  <button class="go" id="vodGo">Find the best moments</button>
+  <div class="note hidden" id="vodNote"></div>
+</section>
 
 <div class="toast" id="toast"></div>
 
@@ -340,7 +393,7 @@ function renderBar(s){
       el = document.createElement("button"); el.className = "chip"; el.dataset.name = n;
       el.innerHTML = `<span class="dot"></span><span class="pf ${c.platform}">${PF[c.platform]||""}</span><span>${c.label||n}</span><span class="n"></span><span class="x" title="Remove ${c.label||n}">×</span>`;
       el.onclick = e => { if (e.target.classList.contains("x")) removeCh(n); else { sel = n; render(); } };
-      bar.insertBefore(el, $("addForm"));
+      bar.insertBefore(el, $("openVod"));
     }
     el.classList.toggle("sel", n === sel);
     const col = c.status === "live" ? (c.chat_connected ? "var(--signal)" : "var(--amber)") : c.status === "starting" ? "var(--amber)" : "var(--rec)";
@@ -357,7 +410,7 @@ function render(){
   if (style) $("styleName").textContent = style.enabled ? style.preset : "off";
   $("captions").textContent = s.captions ? "Groq captions on" : "captions off";
   $("log").textContent = s.log.join("\n");
-  renderClips(s.clips);
+  renderClips(s.clips); renderJobs(s.jobs || []);
   const c = s.channels[sel];
   if (!c){ $("rec").className = "rec off"; $("channel").textContent = "autoclip"; $("tc").firstChild.nodeValue = "00:00:00"; return; }
   const b = c.buckets, last = b[b.length-1] || {n:0, avg:0};
@@ -433,36 +486,83 @@ function drawChart(b, cfg){
     g.textAlign = "right"; g.fillText(d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}), x + bw, H - 6); g.textAlign = "left"; }
 }
 
-function renderClips(clips){
+let sortBy = "new";
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const postText = c => [c.title, c.description, (c.hashtags||[]).map(t => "#" + t).join(" ")].filter(Boolean).join("\n\n");
+
+function renderClips(all){
   const strip = $("strip");
-  $("clipsSub").textContent = clips.length ? "newest first · click to play" : "";
+  const clips = sortBy === "score" ? [...all].sort((a,b) => (b.score ?? -1) - (a.score ?? -1)) : all;
+  $("clipsSub").textContent = clips.length ? (sortBy === "score" ? "best first" : "newest first") + " · click to play" : "";
   if (!clips.length){
-    strip.innerHTML = '<div class="empty"><b>No clips yet.</b> When chat jumps past the red dashed line, a 30-second vertical clip lands here. Press <b>C</b> to clip the last 30 seconds yourself.</div>';
+    strip.innerHTML = '<div class="empty"><b>No clips yet.</b> When chat jumps past the red dashed line, a vertical clip lands here. Press <b>C</b> to clip the last 30 seconds yourself, or turn a <b>long video</b> into clips.</div>';
     rendered = {}; return;
   }
   if (strip.querySelector(".empty")) strip.innerHTML = "";
+  [...strip.children].forEach(el => { if (!clips.some(c => "c-" + c.name === el.id)) el.remove(); });
   clips.forEach((c, idx) => {
-    const key = c.name + ":" + c.status;
+    const key = [c.name, c.status, c.score, c.title].join(":");
     let el = document.getElementById("c-" + c.name);
-    if (el && rendered[c.name] === key){ el.querySelector(".when").textContent = ago(c.created); return; }
+    if (el && rendered[c.name] === key){
+      el.querySelector(".when").textContent = ago(c.created);
+      if (strip.children[idx] !== el) strip.insertBefore(el, strip.children[idx] || null);
+      return;
+    }
     rendered[c.name] = key;
-    const ready = c.status === "ready";
+    const ready = c.status === "ready", sc = c.score;
+    const scCls = sc >= 80 ? "hot" : sc >= 60 ? "mid" : "low";
+    const chLabel = (c.channel || "").replace(/^(kick|youtube|vod):/, (m,p) => (PF[p] || "VOD") + " · ");
     const html = `
       <div class="frame">
         ${ready ? `<video src="/clips/${c.name}" preload="metadata" controls playsinline></video>`
                 : `<div class="busy ${c.status==="failed"?"failed":""}"><div class="label">${c.status==="failed"?"failed":c.status+"…"}</div><div class="bar"><i></i></div></div>`}
-        <span class="tag ${c.reason}">${c.reason === "spike" ? "spike · " + c.peak : c.reason}</span>
-        ${c.channel ? `<span class="tag-ch">${c.channel.replace(/^(kick|youtube):/, (m,p) => (PF[p]||p) + " · ")}</span>` : ""}
+        <span class="tag ${c.reason}">${c.reason === "spike" ? "spike · " + c.peak : c.reason === "vod" ? "AI pick" : c.reason}</span>
+        ${sc != null ? `<span class="score ${scCls}" title="${esc(c.why || "")}">${sc}</span>` : ""}
+        ${chLabel ? `<span class="tag-ch">${esc(chLabel)}</span>` : ""}
       </div>
       <div class="meta"><span class="when">${ago(c.created)}</span><span>${c.size ? mb(c.size) : ""}</span></div>
-      <div class="cap">${c.caption ? c.caption.replace(/</g,"&lt;") : (ready ? "—" : "")}</div>
-      ${ready ? `<a href="/clips/${c.name}" download>Download ↓</a>` : ""}`;
+      ${c.title ? `<div class="ttl">${esc(c.title)}</div>` : `<div class="cap">${c.caption ? esc(c.caption) : (ready ? "—" : "")}</div>`}
+      ${(c.hashtags||[]).length ? `<div class="tags">${c.hashtags.map(t => "#" + esc(t)).join(" ")}</div>` : ""}
+      ${ready ? `<div class="acts"><a href="/clips/${c.name}" download>Download ↓</a>${c.title ? `<button data-copy="${c.name}">Copy post</button>` : ""}</div>` : ""}`;
     if (!el){ el = document.createElement("div"); el.className = "card"; el.id = "c-" + c.name; }
     el.innerHTML = html;
-    const at = strip.children[idx];
-    if (at !== el) strip.insertBefore(el, at || null);
+    if (strip.children[idx] !== el) strip.insertBefore(el, strip.children[idx] || null);
   });
 }
+$("strip").onclick = async e => {
+  const n = e.target.dataset && e.target.dataset.copy; if (!n) return;
+  const c = state.clips.find(x => x.name === n); if (!c) return;
+  try { await navigator.clipboard.writeText(postText(c)); toast("Title + caption + hashtags copied"); } catch(_) { toast("Copy failed"); }
+};
+$("sortSeg").onclick = e => { const v = e.target.dataset.s; if (!v) return; sortBy = v;
+  document.querySelectorAll("#sortSeg button").forEach(b => b.classList.toggle("sel", b.dataset.s === v)); rendered = {}; renderClips(state.clips); };
+
+/* ---------- long video jobs ---------- */
+function renderJobs(jobs){
+  const box = $("jobs"); box.classList.toggle("hidden", !jobs.length);
+  box.innerHTML = jobs.slice(0, 4).map(j => {
+    const done = j.stage === "done", err = j.stage === "failed";
+    const pct = Math.round((j.progress || 0) * 100);
+    const st = err ? `failed · ${esc(j.error)}` : done ? `done · ${j.clips.length} clips` :
+      `${esc(j.stage)}${j.stage === "downloading" || j.stage === "transcribing" || j.stage === "finding moments" ? " · " + pct + "%" : ""}`;
+    return `<div class="job"><div><div class="t">${esc(j.title || j.url)}</div><div class="st ${err ? "err" : done ? "ok" : ""}">${st}</div></div>
+      <div class="pbar"><i class="${done ? "ok" : err ? "err" : ""}" style="width:${done ? 100 : err ? 100 : pct}%"></i></div>
+      ${done || err ? "" : `<button class="x" data-cancel="${j.id}">cancel</button>`}</div>`; }).join("");
+}
+$("jobs").onclick = e => { const id = e.target.dataset && e.target.dataset.cancel; if (id) api("/api/vod/cancel", {id}).then(() => toast("Cancelling…")); };
+let vodCount = 5, vodLen = "20-60";
+function openVod(){ $("vodModal").classList.add("open"); $("scrim").classList.add("open"); setTimeout(() => $("vodUrl").focus(), 50);
+  $("vodNote").classList.toggle("hidden", !!state.ai); $("vodNote").textContent = "Needs GROQ_API_KEY in the Terminal that runs autoclip."; }
+function closeVod(){ $("vodModal").classList.remove("open"); if (!$("drawer").classList.contains("open")) $("scrim").classList.remove("open"); }
+$("openVod").onclick = openVod; $("closeVod").onclick = closeVod;
+$("vodCount").onclick = e => { if (e.target.dataset.v){ vodCount = +e.target.dataset.v; document.querySelectorAll("#vodCount button").forEach(b => b.classList.toggle("sel", b === e.target)); } };
+$("vodLen").onclick = e => { if (e.target.dataset.v){ vodLen = e.target.dataset.v; document.querySelectorAll("#vodLen button").forEach(b => b.classList.toggle("sel", b === e.target)); } };
+$("vodGo").onclick = async () => {
+  const [mn, mx] = vodLen.split("-").map(Number);
+  try { await api("/api/vod", {url: $("vodUrl").value, count: vodCount, min_len: mn, max_len: mx});
+    toast("Started — progress shows above your clips"); $("vodUrl").value = ""; closeVod(); poll(); }
+  catch(e){ toast(e.message); }
+};
 
 async function clipNow(){
   if (!sel) return toast("Add a channel first");
@@ -471,7 +571,7 @@ async function clipNow(){
 }
 $("clipNow").onclick = clipNow;
 $("reveal").onclick = () => fetch("/api/reveal", {method:"POST"});
-addEventListener("keydown", e => { if (!/INPUT|SELECT/.test(e.target.tagName) && !$("drawer").classList.contains("open") && (e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
+addEventListener("keydown", e => { if (!/INPUT|SELECT/.test(e.target.tagName) && !$("drawer").classList.contains("open") && !$("vodModal").classList.contains("open") && (e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
 addEventListener("resize", () => state && drawChart(state.buckets, state.settings));
 setInterval(() => { if (state && state.channels[sel]){ state.now += 1; $("tc").firstChild.nodeValue = fmtT(state.now - state.channels[sel].started); } }, 1000);
 /* ---------- caption studio ---------- */
@@ -493,6 +593,7 @@ function initStudio(s){
   sw("cColor","color"); sw("cHi","highlight");
   $("cPresets").onclick = e => { const b = e.target.closest(".preset"); if (b) set({...s.presets[b.dataset.p], preset: b.dataset.p}); };
   $("cWords").onclick = e => { if (e.target.dataset.v) set({words: +e.target.dataset.v}); };
+  $("cLayout").onclick = e => { const v = e.target.dataset.v; if (v) { style = {...style, layout: v}; if (v === "split" && style.position > 35 && style.position < 50) style.position = 40; syncStudio(); schedule(); } };
   $("cFont").onchange = e => set({font: e.target.value});
   $("cSize").oninput = e => set({size: +e.target.value}); $("cPos").oninput = e => set({position: +e.target.value});
   $("cOut").oninput = e => set({outline: +e.target.value});
@@ -507,6 +608,8 @@ function set(patch){
 function syncStudio(){
   document.querySelectorAll(".preset").forEach(b => b.classList.toggle("sel", b.dataset.p === style.preset));
   document.querySelectorAll("#cWords button").forEach(b => b.classList.toggle("sel", +b.dataset.v === style.words));
+  document.querySelectorAll("#cLayout button").forEach(b => b.classList.toggle("sel", b.dataset.v === (style.layout || "blur")));
+  $("cFaceNote").classList.toggle("hidden", !(style.layout === "split" && state && state.facecam === false));
   $("cFont").value = style.font; $("cSize").value = style.size; $("cSizeV").textContent = style.size + "px";
   $("cPos").value = style.position; $("cPosV").textContent = style.position < 35 ? "top" : style.position > 65 ? "bottom" : "middle";
   $("cOut").value = style.outline; $("cOutV").textContent = style.outline;
@@ -525,12 +628,14 @@ function preview(){
   const img = $("pvImg"); img.classList.add("loading");
   img.onload = () => img.classList.remove("loading");
   img.src = "/api/caption_preview?s=" + encodeURIComponent(JSON.stringify(style)) + "&ch=" + encodeURIComponent(sel || "") + "&t=" + Date.now();
-  $("pvLbl").textContent = sel && state.channels[sel] ? "preview · frame from " + (state.channels[sel].label || sel) : "preview";
+  $("pvLbl").textContent = "rendering preview…";
+  img.onload = () => { img.classList.remove("loading");
+    $("pvLbl").textContent = sel && state.channels[sel] ? "preview · frame from " + (state.channels[sel].label || sel) : "preview"; };
 }
 function openStudio(){ if (!style) return; $("drawer").classList.add("open"); $("scrim").classList.add("open"); preview(); }
 function closeStudio(){ $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); }
-$("openStudio").onclick = openStudio; $("closeStudio").onclick = closeStudio; $("scrim").onclick = closeStudio;
-addEventListener("keydown", e => { if (e.key === "Escape") closeStudio(); });
+$("openStudio").onclick = openStudio; $("closeStudio").onclick = closeStudio; $("scrim").onclick = () => { closeStudio(); closeVod(); };
+addEventListener("keydown", e => { if (e.key === "Escape"){ closeStudio(); closeVod(); } });
 
 poll(); setInterval(poll, 2000);
 </script>
