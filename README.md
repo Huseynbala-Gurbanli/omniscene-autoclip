@@ -29,6 +29,8 @@ python3 autoclip.py ohnepixel kick.com/xqc youtube.com/@IShowSpeed
 The dashboard opens automatically at **http://localhost:8787**:
 
 - **add / remove channels** — record several streamers at once, one tab each
+- **Caption studio** — 5 presets (bold, karaoke, pop, box, minimal), font, size, position,
+  words on screen, colors, active-word highlight/pop, outline, box, shadow — with live preview
 - live chat-velocity chart with baseline, spike threshold and spike markers
 - current rate, baseline, peak, recorded size, chat status
 - **Clip last 30 s** button (or press `C`) for manual clips

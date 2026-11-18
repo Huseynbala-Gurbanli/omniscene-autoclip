@@ -64,6 +64,52 @@
   .tag-ch{position:absolute;bottom:8px;left:8px;font:500 10px var(--mono);padding:3px 6px;background:rgba(11,11,12,.8);border-radius:2px;color:var(--text)}
   .hidden{display:none!important}
 
+  /* ---------- caption studio drawer ---------- */
+  .studio-btn{font:600 12px var(--mono);letter-spacing:.06em;padding:9px 14px;border:1px solid var(--line2);border-radius:3px;color:var(--text)}
+  .studio-btn:hover{border-color:var(--signal)}
+  .studio-btn b{color:var(--signal);font-weight:700}
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:20}
+  .scrim.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:min(860px,100vw);background:var(--bg);border-left:1px solid var(--line);
+    z-index:21;transform:translateX(100%);transition:transform .28s cubic-bezier(.2,.8,.2,1);display:grid;grid-template-columns:330px 1fr;overflow:hidden}
+  .drawer.open{transform:none}
+  .pv{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px}
+  .phone{width:270px;aspect-ratio:9/16;border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:#000;position:relative}
+  .phone img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .15s ease}
+  .phone img.loading{opacity:.55}
+  .pv .label{text-align:center}
+  .ctrls{overflow-y:auto;padding:26px 28px 40px}
+  .ctrls h2{font:800 28px var(--display);letter-spacing:-.02em;margin-bottom:4px}
+  .ctrls .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .ctrl{padding:16px 0;border-top:1px solid var(--line)}
+  .ctrl .label{display:flex;justify-content:space-between;margin-bottom:10px}
+  .ctrl .label .val{color:var(--text)}
+  .presets{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .preset{padding:14px 6px 10px;border:1px solid var(--line2);border-radius:3px;text-align:center;transition:border-color .15s ease,background-color .15s ease}
+  .preset:hover{border-color:var(--muted)}
+  .preset.sel{border-color:var(--signal);background:var(--panel)}
+  .preset .demo{font:900 15px "Arial Black",Impact,sans-serif;letter-spacing:.01em;height:24px;display:flex;align-items:center;justify-content:center;gap:4px;-webkit-text-stroke:.6px #000}
+  .preset .nm{font:500 10px var(--mono);color:var(--muted);margin-top:6px;letter-spacing:.08em;text-transform:uppercase}
+  .seg{display:inline-flex;border:1px solid var(--line2);border-radius:3px;overflow:hidden}
+  .seg button{padding:8px 14px;font:500 12px var(--mono);color:var(--muted);border-right:1px solid var(--line2)}
+  .seg button:last-child{border-right:0}
+  .seg button.sel{background:var(--text);color:var(--bg)}
+  input[type=range]{width:100%;accent-color:var(--signal)}
+  select{background:var(--panel);color:var(--text);border:1px solid var(--line2);border-radius:3px;padding:9px 10px;font:13px var(--mono);width:100%}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .sw{width:28px;height:28px;border-radius:50%;border:2px solid transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.15)}
+  .sw.sel{border-color:var(--text)}
+  .swatches input[type=color]{width:30px;height:30px;border:0;background:none;padding:0;cursor:pointer}
+  .toggle{display:flex;align-items:center;justify-content:space-between;cursor:pointer}
+  .toggle input{appearance:none;width:40px;height:22px;border-radius:11px;background:var(--line2);position:relative;cursor:pointer;transition:background-color .15s ease}
+  .toggle input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--text);transition:transform .15s ease}
+  .toggle input:checked{background:var(--signal)} .toggle input:checked::after{transform:translateX(18px);background:var(--bg)}
+  .close{position:absolute;top:16px;right:18px;font:400 22px var(--mono);color:var(--muted);z-index:2}
+  .close:hover{color:var(--text)}
+  .note{font:12px var(--mono);color:var(--amber);margin-top:6px}
+  @media (max-width:760px){.drawer{grid-template-columns:1fr;overflow-y:auto}.pv{padding:18px}.phone{width:200px}.ctrls{overflow:visible}.presets{grid-template-columns:repeat(3,1fr)}}
+
   /* ---------- main grid ---------- */
   main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:1px;background:var(--line)}
   section{background:var(--bg)}
@@ -158,7 +204,10 @@
     <h1 id="channel">autoclip</h1>
     <span id="captions">captions —</span>
   </div>
-  <div class="tc mono" id="tc">00:00:00<small>ELAPSED</small></div>
+  <div style="display:flex;align-items:center;gap:22px">
+    <button class="studio-btn" id="openStudio">Captions · <b id="styleName">karaoke</b></button>
+    <div class="tc mono" id="tc">00:00:00<small>ELAPSED</small></div>
+  </div>
 </header>
 
 <nav class="chbar" id="chbar">
@@ -221,6 +270,43 @@
   <pre id="log"></pre>
 </details>
 
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Caption studio">
+  <button class="close" id="closeStudio" aria-label="Close">×</button>
+  <div class="pv">
+    <div class="phone"><img id="pvImg" alt="Caption preview"></div>
+    <div class="label" id="pvLbl">live preview</div>
+  </div>
+  <div class="ctrls">
+    <h2>Caption studio</h2>
+    <p class="sub">Applies to every new clip. Saved automatically.</p>
+    <div class="ctrl"><label class="toggle"><span class="label" style="margin:0">Captions on new clips</span><input type="checkbox" id="cEnabled"></label>
+      <div class="note hidden" id="cKeyNote">No Groq key in this Terminal: set GROQ_API_KEY and restart to get captions.</div></div>
+    <div class="ctrl"><div class="label">Style</div><div class="presets" id="cPresets"></div></div>
+    <div class="ctrl row2">
+      <div><div class="label">Font</div><select id="cFont"></select></div>
+      <div><div class="label">Words on screen</div><div class="seg" id="cWords"></div></div>
+    </div>
+    <div class="ctrl row2">
+      <div><div class="label">Size <span class="val mono" id="cSizeV"></span></div><input type="range" id="cSize" min="40" max="160" step="2"></div>
+      <div><div class="label">Position <span class="val mono" id="cPosV"></span></div><input type="range" id="cPos" min="8" max="92"></div>
+    </div>
+    <div class="ctrl row2">
+      <div><div class="label">Text color</div><div class="swatches" id="cColor"></div></div>
+      <div><div class="label">Active word</div><div class="swatches" id="cHi"></div></div>
+    </div>
+    <div class="ctrl row2">
+      <div><div class="label">Outline <span class="val mono" id="cOutV"></span></div><input type="range" id="cOut" min="0" max="16"></div>
+      <div style="display:grid;gap:12px">
+        <label class="toggle"><span class="label" style="margin:0">UPPERCASE</span><input type="checkbox" id="cUpper"></label>
+        <label class="toggle"><span class="label" style="margin:0">Pop active word</span><input type="checkbox" id="cPop"></label>
+        <label class="toggle"><span class="label" style="margin:0">Background box</span><input type="checkbox" id="cBox"></label>
+        <label class="toggle"><span class="label" style="margin:0">Soft shadow</span><input type="checkbox" id="cShadow"></label>
+      </div>
+    </div>
+  </div>
+</aside>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -267,7 +353,8 @@ function renderBar(s){
 }
 
 function render(){
-  const s = state; renderBar(s);
+  const s = state; renderBar(s); initStudio(s);
+  if (style) $("styleName").textContent = style.enabled ? style.preset : "off";
   $("captions").textContent = s.captions ? "Groq captions on" : "captions off";
   $("log").textContent = s.log.join("\n");
   renderClips(s.clips);
@@ -384,9 +471,67 @@ async function clipNow(){
 }
 $("clipNow").onclick = clipNow;
 $("reveal").onclick = () => fetch("/api/reveal", {method:"POST"});
-addEventListener("keydown", e => { if (e.target.tagName !== "INPUT" && (e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
+addEventListener("keydown", e => { if (!/INPUT|SELECT/.test(e.target.tagName) && !$("drawer").classList.contains("open") && (e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
 addEventListener("resize", () => state && drawChart(state.buckets, state.settings));
 setInterval(() => { if (state && state.channels[sel]){ state.now += 1; $("tc").firstChild.nodeValue = fmtT(state.now - state.channels[sel].started); } }, 1000);
+/* ---------- caption studio ---------- */
+let style = null, styleInit = false, pvTimer = null, saveTimer = null;
+const COLORS = ["#FFFFFF","#D4FF3A","#FFD400","#FF3B2F","#3AE0FF","#B18CFF"];
+const DEMO = {bold:['NO','WAY'], karaoke:['NO','WAY'], pop:['NO','WAY'], box:['no','way'], minimal:['no','way']};
+
+function initStudio(s){
+  if (styleInit || !s.caption_style || !s.caption_style.font) return;
+  styleInit = true; style = {...s.caption_style};
+  $("cFont").innerHTML = s.fonts.map(f => `<option>${f}</option>`).join("");
+  $("cWords").innerHTML = [1,2,3,4,5].map(n => `<button data-v="${n}">${n}</button>`).join("");
+  $("cPresets").innerHTML = Object.entries(s.presets).map(([k,p]) => `
+    <button class="preset" data-p="${k}"><div class="demo" style="${p.box?'background:#111;padding:2px 6px;border-radius:3px;-webkit-text-stroke:0;':''}${p.font==='Rounded'||p.font==='Helvetica'?'font-family:Helvetica,Arial,sans-serif;font-weight:700;-webkit-text-stroke:0;':''}">
+      <span style="color:${p.color}">${DEMO[k][0]}</span><span style="color:${p.highlight};${p.pop?'font-size:19px':''}">${DEMO[k][1]}</span></div><div class="nm">${k}</div></button>`).join("");
+  const sw = (id, key) => { $(id).innerHTML = COLORS.map(c => `<button class="sw" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join("") + `<input type="color" aria-label="custom">`;
+    $(id).onclick = e => { if (e.target.dataset.c) set({[key]: e.target.dataset.c}); };
+    $(id).querySelector("input").oninput = e => set({[key]: e.target.value.toUpperCase()}); };
+  sw("cColor","color"); sw("cHi","highlight");
+  $("cPresets").onclick = e => { const b = e.target.closest(".preset"); if (b) set({...s.presets[b.dataset.p], preset: b.dataset.p}); };
+  $("cWords").onclick = e => { if (e.target.dataset.v) set({words: +e.target.dataset.v}); };
+  $("cFont").onchange = e => set({font: e.target.value});
+  $("cSize").oninput = e => set({size: +e.target.value}); $("cPos").oninput = e => set({position: +e.target.value});
+  $("cOut").oninput = e => set({outline: +e.target.value});
+  [["cUpper","uppercase"],["cPop","pop"],["cBox","box"],["cShadow","shadow"],["cEnabled","enabled"]].forEach(([id,k]) => $(id).onchange = e => set({[k]: e.target.checked}));
+  syncStudio();
+}
+function set(patch){
+  style = {...style, ...patch};
+  if (!("preset" in patch) && Object.keys(patch).some(k => k !== "enabled" && k !== "position")) style.preset = "custom";
+  syncStudio(); schedule();
+}
+function syncStudio(){
+  document.querySelectorAll(".preset").forEach(b => b.classList.toggle("sel", b.dataset.p === style.preset));
+  document.querySelectorAll("#cWords button").forEach(b => b.classList.toggle("sel", +b.dataset.v === style.words));
+  $("cFont").value = style.font; $("cSize").value = style.size; $("cSizeV").textContent = style.size + "px";
+  $("cPos").value = style.position; $("cPosV").textContent = style.position < 35 ? "top" : style.position > 65 ? "bottom" : "middle";
+  $("cOut").value = style.outline; $("cOutV").textContent = style.outline;
+  $("cUpper").checked = style.uppercase; $("cPop").checked = style.pop; $("cBox").checked = style.box; $("cShadow").checked = style.shadow;
+  $("cEnabled").checked = style.enabled;
+  document.querySelectorAll("#cColor .sw").forEach(b => b.classList.toggle("sel", b.dataset.c.toLowerCase() === style.color.toLowerCase()));
+  document.querySelectorAll("#cHi .sw").forEach(b => b.classList.toggle("sel", b.dataset.c.toLowerCase() === style.highlight.toLowerCase()));
+  $("styleName").textContent = style.enabled ? style.preset : "off";
+  $("cKeyNote").classList.toggle("hidden", !!(state && state.captions));
+}
+function schedule(){
+  clearTimeout(pvTimer); pvTimer = setTimeout(preview, 180);
+  clearTimeout(saveTimer); saveTimer = setTimeout(() => api("/api/caption_style", style).catch(()=>{}), 500);
+}
+function preview(){
+  const img = $("pvImg"); img.classList.add("loading");
+  img.onload = () => img.classList.remove("loading");
+  img.src = "/api/caption_preview?s=" + encodeURIComponent(JSON.stringify(style)) + "&ch=" + encodeURIComponent(sel || "") + "&t=" + Date.now();
+  $("pvLbl").textContent = sel && state.channels[sel] ? "preview · frame from " + (state.channels[sel].label || sel) : "preview";
+}
+function openStudio(){ if (!style) return; $("drawer").classList.add("open"); $("scrim").classList.add("open"); preview(); }
+function closeStudio(){ $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); }
+$("openStudio").onclick = openStudio; $("closeStudio").onclick = closeStudio; $("scrim").onclick = closeStudio;
+addEventListener("keydown", e => { if (e.key === "Escape") closeStudio(); });
+
 poll(); setInterval(poll, 2000);
 </script>
 </body>
