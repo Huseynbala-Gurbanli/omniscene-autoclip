@@ -16,7 +16,7 @@ Setup (Mac):
 
 Run:
   python3 autoclip.py                      # then add channels in the dashboard
-  python3 autoclip.py ohnepixel kick.com/xqc youtube.com/@handle
+  python3 autoclip.py <twitch-name> kick.com/<name> youtube.com/@<name>
 
 Platforms:
   Twitch   built in
@@ -66,7 +66,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 
 def parse_source(raw):
-    """'xqc' | 'twitch.tv/xqc' -> twitch;  'kick.com/xqc' | 'kick:xqc' -> kick;
+    """'name' | 'twitch.tv/name' -> twitch;  'kick.com/name' | 'kick:name' -> kick;
     'youtube.com/@handle' | '@handle' | 'yt:@handle' | youtube watch/live URL -> youtube."""
     t = raw.strip()
     low = t.lower()
@@ -1028,6 +1028,11 @@ def caption_preview(style, channel=None):
     st = clean_style(style)
     frame, face = None, None
     ch = CHANNELS.get(channel or "")
+    if not ch:                                  # nothing live: preview on the latest recording, if any
+        recs = recordings()
+        if recs:
+            from types import SimpleNamespace
+            ch = SimpleNamespace(rec=recs[0], file_id="lastrec", key="lastrec")
     if ch and os.path.exists(ch.rec) and os.path.getsize(ch.rec) > 2_000_000:
         jpg = os.path.join(data_dir("tmp"), f"preview_{ch.file_id}.jpg")
         d = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
@@ -1876,7 +1881,7 @@ def bootstrap():
 
 def main():
     p = argparse.ArgumentParser(description="Auto-clip Twitch streams. Add channels here or in the dashboard.")
-    p.add_argument("channels", nargs="*", help="e.g. ohnepixel kaicenat")
+    p.add_argument("channels", nargs="*", help="Twitch names or Kick / YouTube links to start watching right away")
     p.add_argument("--out", default="clips")
     p.add_argument("--no-captions", action="store_true")
     p.add_argument("--port", type=int, default=8787)

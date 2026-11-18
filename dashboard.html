@@ -52,6 +52,7 @@
   .examples{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;align-items:center;color:var(--dim);font-size:14px}
   .examples button{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:14px}
   .examples button:hover{color:var(--text);border-color:var(--line2)}
+  .examples button i{font-style:normal;color:var(--dim)}
   .opts{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
   select{background:var(--panel);color:var(--text);border:1px solid var(--line2);border-radius:8px;padding:6px 8px;font:14px var(--display)}
 
@@ -277,9 +278,10 @@
     </form>
     <div class="examples">
       Try:
-      <button data-ex="twitch.tv/ohnepixel">twitch.tv/ohnepixel</button>
-      <button data-ex="kick.com/adinross">kick.com/adinross</button>
-      <button data-ex="youtube.com/@IShowSpeed">youtube.com/@IShowSpeed</button>
+      <button data-ex="twitch.tv/">twitch.tv/<i>name</i></button>
+      <button data-ex="kick.com/">kick.com/<i>name</i></button>
+      <button data-ex="youtube.com/@">youtube.com/@<i>name</i></button>
+      <button data-ex="https://www.youtube.com/watch?v=">a YouTube video</button>
       <button class="ghost-cta" id="openMk" type="button">✨ Make a faceless video</button>
       <span class="opts">From a video, make
         <select id="count" aria-label="Number of clips"><option>3</option><option selected>5</option><option>8</option><option>12</option></select> clips</span>
@@ -526,7 +528,7 @@ $("startForm").onsubmit = async e => {
   } catch(err){ toast(err.message); }
   $("startBtn").textContent = "Start";
 };
-document.querySelectorAll("[data-ex]").forEach(b => b.onclick = () => { $("link").value = b.dataset.ex; $("link").focus(); });
+document.querySelectorAll("[data-ex]").forEach(b => b.onclick = () => { const i = $("link"); i.value = b.dataset.ex; i.focus(); i.setSelectionRange(i.value.length, i.value.length); });
 
 /* ---------- live ---------- */
 function liveStatus(c){
@@ -671,8 +673,8 @@ function renderClips(){
         ${c.title ? `<div class="ttl">${esc(c.title)}</div>` : ok ? `<div class="ttl" style="color:var(--muted)">Clip from ${esc(source(c))}</div>` : ""}
         <div class="sub"><span class="when">${ago(c.created)}</span> · ${esc(source(c))}${c.reason === "manual" ? " · clipped by you" : c.reason === "spike" ? " · chat went wild" : ""}</div>
         ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
-        ${ok ? `<div class="row"><a class="btn sm solid" href="/clips/${c.name}?v=${c.version || 0}" download="${c.name}">Download</a><button class="btn sm" data-edit="${c.name}">Edit</button>
-          ${c.title ? `<button class="btn sm" data-copy="${c.name}">Copy caption</button>` : ""}
+        ${ok ? `<div class="row"><a class="btn sm solid" href="/clips/${c.name}?v=${c.version || 0}" download="${c.name}">Download</a><button class="btn sm" data-edit="${c.name}">Edit</button></div>
+          <div class="row">${c.title ? `<button class="btn sm" data-copy="${c.name}">Copy caption</button>` : `<span style="flex:1"></span>`}
           <button class="btn sm del" data-show="${c.name}" title="Show in Finder" aria-label="Show in Finder">📂</button>
           <button class="btn sm del" data-del="${c.name}" title="Delete" aria-label="Delete clip">🗑</button></div>` : ""}`;
       if (!el){ el = document.createElement("div"); el.className = "card"; el.id = "c-" + c.name; }

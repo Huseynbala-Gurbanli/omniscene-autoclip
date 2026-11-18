@@ -1,71 +1,188 @@
-# omniscene-autoclip
+<div align="center">
 
-Open-source, local **OpusClip-style clipper** for livestreams and long videos.
-Watches Twitch / Kick / YouTube chat, cuts vertical Shorts when chat explodes, scores every
-clip with AI, and turns long VODs into the best 5–10 clips — with animated captions and a
-facecam split layout.
+# Omniscene Autoclip
 
-| Step | Tool | What it does |
-|---|---|---|
-| Record | streamlink | Saves each live stream to disk |
-| Detect | chat (Twitch IRC / Kick Pusher / YouTube via yt-dlp) | Counts messages every 10 s, flags spikes (2.5× baseline) |
-| Transcribe | Groq Whisper | Word-level timestamps |
-| Judge | Groq LLM | **Viral score 0–100**, hook title, caption, hashtags |
-| Layout | ffmpeg + OpenCV YuNet | Blur, Fill, or **Split** (streamer facecam on top) |
-| Captions | Pillow | Karaoke / pop word-by-word captions, 5 presets |
-| Watch | Dashboard | Control room at `http://localhost:8787` |
+**Paste a link. Get clips.**
 
-## Setup (macOS)
+The free, open-source AI clipper for streamers and creators. Turn Twitch, Kick and YouTube
+livestreams or any long video into ready-to-post Shorts, Reels and TikToks, with animated
+captions, a facecam layout, AI titles and a viral score. It runs on your own computer.
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-d4ff3a?style=flat-square)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-0b0b0c?style=flat-square)](#quick-start)
+[![macOS · Linux](https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Linux-0b0b0c?style=flat-square)](#faq)
+[![Use it in Omniscene.app](https://img.shields.io/badge/no%20setup-Omniscene.app-ff4d3d?style=flat-square)](https://omniscene.app)
+
+<img src="docs/dashboard.png" alt="Omniscene Autoclip dashboard: paste a link, get scored clips with captions" width="860">
+
+</div>
+
+---
+
+## Why Autoclip
+
+- **It watches the stream for you.** Add a live channel and walk away. When chat explodes, it cuts the moment.
+- **AI picks the best parts of long videos.** Paste a VOD or YouTube link and get the 3 to 12 strongest moments.
+- **Every clip is ready to post.** Animated captions, a hook title, a post caption, hashtags and a 0–100 viral score.
+- **Free and open source.** MIT-licensed. Anyone can use it, change it and build on it. No subscription, no watermark.
+- **Nothing to install by hand.** Run one command and it sets itself up.
+
+## Features
+
+### Live clipping: Twitch, Kick, YouTube Live
+Watch several streams at once, each with the live player in the app. Autoclip reads chat in real time and
+clips the spikes automatically, with sensitivity you control. Or clip it yourself: **the last 15s / 30s / 60s / 2 min**,
+or press **Start clip → End clip** to mark exactly the moment you want.
+
+### Long video → best clips
+Paste a YouTube or Twitch VOD link, or pick a file on your computer. Autoclip transcribes the whole thing, reads it
+like an editor would, and cuts the strongest self-contained moments, each with a title and a score.
+
+### Captions people actually read
+<img src="docs/captions.png" alt="Caption styles: Hype, Punchy, Karaoke, Pop, Box, Minimal" width="100%">
+
+Seven styles (**Hype, Punchy, Karaoke, Bold, Pop, Box, Minimal**) with word-by-word highlighting, bounce and zoom
+animations, emoji that match what's being said, and 11 fonts. Every caption is synced to the speech, word by word.
+
+### Facecam on top, gameplay below
+Autoclip finds the streamer's webcam on its own (the face that stays in place while the game moves) and stacks it
+above the gameplay. You can also pick **Full video** (blurred edges) or **Zoomed in**.
+
+### Any format
+<img src="docs/formats.png" alt="Formats: 9:16, 4:5, 1:1, 4:3, 16:9" width="100%">
+
+Vertical **9:16** for Shorts, Reels and TikTok · **4:5** and **1:1** for feeds · **4:3** · Horizontal **16:9** for YouTube.
+
+### Edit any clip
+<img src="docs/editor.png" alt="Clip editor: trim, fix captions, title, style, layout, logo" width="100%">
+
+Drag the start and end, fix any caption word, rewrite the title and hashtags, switch style, layout or format,
+add your logo, then press **Save & re-make clip**.
+
+### Faceless videos
+<img src="docs/faceless.png" alt="Faceless video maker: AI script, voiceover, gameplay background" width="620">
+
+Type a topic. AI writes the script (you can edit it), a natural voice reads it, your gameplay or any video plays
+behind it, and the captions are synced to the voice. You get a finished Short in about a minute.
+
+### Your brand on every clip
+Upload your logo once and choose where it sits. Copy the title, caption and hashtags in one click.
+
+<img src="docs/settings.png" alt="Settings: format, auto-clip timing, logo, caption styles, live preview" width="560">
+
+---
+
+## Quick start
+
+You need a Mac or Linux computer with Python 3.10+ and [git](https://git-scm.com). On a Mac, [Homebrew](https://brew.sh) is recommended.
+
+Run these one at a time:
+
+```bash
+git clone https://github.com/Huseynbala-Gurbanli/omniscene-autoclip
+```
+```bash
+cd omniscene-autoclip
+```
 ```bash
 python3 autoclip.py
 ```
 
-That's it — nothing to install. The first run sets itself up (about a minute): it creates a
-private environment in `.venv` with everything inside (captions, facecam detection, streamlink,
-yt-dlp, Kick chat) and installs ffmpeg with Homebrew if it's missing. Later runs start instantly.
-Then paste your free Groq key (https://console.groq.com/keys) once in the app; it's stored in
-`~/.autoclip/config.json` on your Mac only.
+The first start sets everything up by itself, which takes a minute or two. Then the app opens at **http://localhost:8787**.
 
-## Run
+1. Paste your free **Groq API key** in the yellow box. Get one at [console.groq.com/keys](https://console.groq.com/keys).
+   This turns on captions, AI titles, scores and voices. The key is stored only on your computer.
+2. Paste a link and press **Start**.
+
+That's it. Finished videos land in the `clips/` folder; click **📂 Open folder** in the app.
+
+> **Want it without any setup?** Autoclip can be used in **[Omniscene.app](https://omniscene.app)**: same clipping,
+> hosted for you. Nothing to install, and it works from any device.
+
+---
+
+## How it works
+
+| Step | What happens | Powered by |
+|---|---|---|
+| Watch | Records the live stream and reads chat (Twitch, Kick, YouTube) | streamlink, yt-dlp |
+| Detect | Counts chat messages every 10 s and flags spikes against the stream's normal level | built in |
+| Listen | Word-level transcript | Groq Whisper |
+| Judge | Viral score 0–100, hook title, post caption, hashtags; picks moments in long videos | Groq LLM |
+| Frame | Finds the facecam, builds the layout in your format | OpenCV (YuNet), ffmpeg |
+| Caption | Animated word-by-word captions, emoji, logo | Pillow, ffmpeg |
+| Voice | Voiceovers for faceless videos (Mac voice as a fallback) | Groq Orpheus |
+
+Everything runs on your computer. Only audio and text go to Groq for transcription, AI and voices.
+
+---
+
+## FAQ
+
+**Is it really free?**
+Yes. Autoclip is MIT-licensed open source. The AI features use your own Groq key, and Groq has a free tier. If you
+go past it, you pay Groq directly, not us.
+
+**Which computers does it run on?**
+macOS and Linux. Windows isn't supported yet. If your Python is very new (3.15),
+Autoclip builds its environment on a stable version automatically.
+
+**Where are my files?**
+Finished videos are in `clips/`. Recordings, editor data and settings live in the hidden `clips/.autoclip/` folder.
+Full stream recordings can be several GB, so delete old ones in that folder if you need space.
+
+**The Groq voices don't work.**
+Open the [Groq Playground](https://console.groq.com/playground) once, choose `canopylabs/orpheus-v1-english`
+and accept its terms. Until then, Autoclip uses your Mac's built-in voice.
+
+**Can I post clips of other people's streams?**
+Only with permission. Many streamers run clipping programs or allow clips with credit. Check their rules first.
+You're responsible for the content you publish.
+
+**Something isn't working.**
+Open **Settings → Setup check** in the app. It shows what's ready, and **Test AI now** checks your Groq key for real.
+The **Activity log** shows details. If you're still stuck, [open an issue](https://github.com/Huseynbala-Gurbanli/omniscene-autoclip/issues).
+
+---
+
+## Advanced
 
 ```bash
-python3 autoclip.py                                         # then paste links in the app
-python3 autoclip.py ohnepixel kick.com/xqc                  # or start watching right away
+python3 autoclip.py <twitch-name> kick.com/<name> youtube.com/@<name>   # start watching right away
+python3 autoclip.py --port 8787 --out clips --no-browser --no-captions
 ```
 
-## How to use
+Environment variables: `GROQ_LLM_MODEL` (default `openai/gpt-oss-120b`), `GROQ_STT_MODEL`
+(default `whisper-large-v3-turbo`), `GROQ_TTS_MODEL` (default `canopylabs/orpheus-v1-english`).
+Chat-spike tuning lives at the top of `autoclip.py`; auto-clip length, lead-in and cooldown are in Settings.
 
-1. **Paste a link, press Start.**
-   - A live stream (Twitch name, `kick.com/x`, `youtube.com/@x`) → autoclip watches it and clips
-     the moments chat goes wild. Press **Clip now** any time.
-   - A video (YouTube / Twitch VOD link or a file on your Mac) → AI picks the best 3–12 moments.
-2. **Your clips** appear below with a score (🔥 Great / Good / OK), a title, **Download** and
-   **Copy caption** (title + caption + hashtags).
-3. **Format**: Vertical 9:16, Portrait 4:5, Square 1:1, Classic 4:3 or Horizontal 16:9 —
-   on the main screen, per faceless video, or per clip in the editor.
-4. **Edit** any clip: drag the start/end, fix caption words, change title/caption/hashtags,
-   style, layout, format, and add your logo → it re-makes the clip in place.
-5. **✨ Make a faceless video**: type a topic → AI writes the script (editable) → a Groq voice
-   reads it (Mac voice as fallback) → your recorded gameplay or any video plays behind it.
-6. **Settings** → caption style (Hype, Punchy, Karaoke, Bold, Pop, Box, Minimal — bounce/zoom
-   animations, emoji, 11 fonts), layout, logo, auto-clip timing, setup check and **Test AI**.
+## Roadmap
 
-Finished videos are saved to `clips/` (nothing else goes there). autoclip's own files — stream
-recordings, clip sources for the editor, titles/scores, settings — live in the hidden `clips/.autoclip/`.
+- One-click upload to YouTube Shorts, TikTok and Instagram Reels
+- Windows support
+- B-roll and sound effects
+- More voices and languages
 
-## Options
+Ideas and pull requests are welcome.
 
-`--port 8787` · `--no-browser` · `--no-captions` · `--out clips`
-Env: `GROQ_LLM_MODEL` (default `openai/gpt-oss-120b`), `GROQ_STT_MODEL` (default `whisper-large-v3-turbo`).
-Tuning constants at the top of `autoclip.py`: `SPIKE_X`, `MIN_MSGS`, `CLIP_LEN`, `PRE`, `COOLDOWN`.
+## Contributing
 
-## Note
+1. Fork the repo and create a branch.
+2. Run `python3 autoclip.py` and make your change. The app reloads the dashboard from `dashboard.html`.
+3. Open a pull request with a short description and a screenshot if it touches the UI.
 
-Only post clips of streams/videos you have permission to use (e.g. a streamer's clipping program).
-Face model: YuNet from OpenCV Zoo (MIT) — see `models/README.md`. Fonts: OFL / Apache — see `fonts/README.md`.
-Groq voices (Orpheus) need a one-time terms acceptance in the Groq Playground.
+## Credits
+
+- Face detection: [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (MIT). See `models/README.md`
+- Fonts: Anton, Bebas Neue, Bangers, Poppins, Montserrat (SIL OFL 1.1), Luckiest Guy (Apache 2.0). See `fonts/README.md`
+- Emoji fallback: [Twemoji](https://github.com/jdecked/twemoji) (CC-BY 4.0)
+- Built on [streamlink](https://streamlink.github.io), [yt-dlp](https://github.com/yt-dlp/yt-dlp), [ffmpeg](https://ffmpeg.org), [Pillow](https://python-pillow.org), [OpenCV](https://opencv.org) and [Groq](https://groq.com)
+- Demo footage in the screenshots uses a public-domain NASA portrait as a stand-in facecam
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Huseyn Gurbanli. Free for personal and commercial use.
+
+<div align="center">
+<sub>Made by Huseyn Gurbanli · Autoclip can be used in <a href="https://omniscene.app">Omniscene.app</a></sub>
+</div>
