@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autoclip · control room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0b0c; --panel:#121214; --panel2:#18181b; --line:#242427; --line2:#303034;
+    --text:#ece9e3; --muted:#86837d; --dim:#55534f;
+    --rec:#ff3b2f; --signal:#d4ff3a; --amber:#ffb020;
+    --display:"Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+    --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--text)}
+  body{font:14px/1.45 var(--display);min-height:100vh;-webkit-font-smoothing:antialiased}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  :focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+  /* ---------- top bar ---------- */
+  header{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:28px;
+    padding:18px 28px;border-bottom:1px solid var(--line)}
+  .rec{display:flex;align-items:center;gap:10px;font:700 12px var(--mono);letter-spacing:.14em}
+  .rec i{width:10px;height:10px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 4px rgba(255,59,47,.15)}
+  .rec.on i{animation:blink 1.2s steps(1) infinite}
+  .rec.off{color:var(--dim)} .rec.off i{background:var(--dim);box-shadow:none}
+  @keyframes blink{50%{opacity:.25}}
+  .who{display:flex;align-items:baseline;gap:14px;min-width:0}
+  .who h1{font:800 26px/1 var(--display);letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .who span{color:var(--muted);font-size:12px}
+  .tc{font:500 22px var(--mono);letter-spacing:.04em}
+  .tc small{display:block;font-size:10px;color:var(--muted);letter-spacing:.16em;text-align:right}
+
+  /* ---------- main grid ---------- */
+  main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:1px;background:var(--line)}
+  section{background:var(--bg)}
+  .label{font:500 10px var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+
+  .chart{padding:22px 28px 18px;display:flex;flex-direction:column}
+  .chart-head{display:flex;flex-wrap:wrap;gap:8px 20px;justify-content:space-between;align-items:flex-end;margin-bottom:14px}
+  .legend{display:flex;gap:18px;font:11px var(--mono);color:var(--muted)}
+  .legend b{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:6px}
+  canvas{display:block;width:100%;flex:1;min-height:300px}
+
+  .rail{display:flex;flex-direction:column}
+  .big{padding:22px 24px;border-bottom:1px solid var(--line)}
+  .big .n{font:700 68px/1 var(--mono);letter-spacing:-.04em;margin:10px 0 6px;font-variant-numeric:tabular-nums}
+  .big .n.hot{color:var(--rec)}
+  .meter{height:6px;background:var(--panel2);position:relative;margin-top:12px}
+  .meter i{position:absolute;inset:0 auto 0 0;background:var(--signal);transition:width .4s ease}
+  .meter i.hot{background:var(--rec)}
+  .meter u{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--text)}
+  .meter-cap{display:flex;justify-content:space-between;font:10px var(--mono);color:var(--muted);margin-top:8px}
+  .stats{display:grid;grid-template-columns:1fr 1fr}
+  .stat{padding:16px 24px;border-bottom:1px solid var(--line)}
+  .stat:nth-child(odd){border-right:1px solid var(--line)}
+  .stat .v{font:500 20px var(--mono);margin-top:4px}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;vertical-align:1px}
+  .actions{padding:20px 24px;display:grid;gap:10px;margin-top:auto}
+  .btn-clip{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;
+    background:var(--text);color:var(--bg);font:800 17px var(--display);letter-spacing:-.01em;border-radius:3px;
+    transition:transform .12s ease, background-color .2s ease}
+  .btn-clip:hover{background:var(--signal)} .btn-clip:active{transform:scale(.985)}
+  .btn-clip kbd{font:500 11px var(--mono);border:1px solid rgba(0,0,0,.35);padding:2px 6px;border-radius:2px}
+  .btn-ghost{padding:11px 18px;border:1px solid var(--line2);border-radius:3px;font:500 12px var(--mono);
+    color:var(--muted);text-align:left;transition:color .15s ease,border-color .15s ease}
+  .btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+
+  /* ---------- clips ---------- */
+  .clips{border-top:1px solid var(--line);padding:22px 28px 30px}
+  .clips-head{display:flex;align-items:baseline;gap:14px;margin-bottom:16px}
+  .clips-head h2{font:800 22px var(--display);letter-spacing:-.02em}
+  .strip{display:grid;grid-auto-flow:column;grid-auto-columns:200px;gap:16px;overflow-x:auto;padding-bottom:10px;
+    scrollbar-color:var(--line2) transparent}
+  .card{display:flex;flex-direction:column;gap:9px}
+  .frame{position:relative;aspect-ratio:9/16;background:var(--panel);border:1px solid var(--line);overflow:hidden;border-radius:3px}
+  .frame video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+  .frame .tag{position:absolute;top:8px;left:8px;font:700 9px var(--mono);letter-spacing:.14em;padding:3px 6px;
+    background:rgba(11,11,12,.8);border-radius:2px;text-transform:uppercase}
+  .tag.spike{color:var(--rec)} .tag.manual{color:var(--signal)} .tag.earlier{color:var(--muted)}
+  .busy{position:absolute;inset:0;display:grid;place-content:center;gap:12px;text-align:center;
+    background:repeating-linear-gradient(-45deg,var(--panel) 0 10px,var(--panel2) 10px 20px)}
+  .busy .label{color:var(--amber)}
+  .bar{width:120px;height:2px;background:var(--line2);overflow:hidden;margin:0 auto}
+  .bar i{display:block;height:100%;width:40%;background:var(--amber);animation:slide 1.1s ease-in-out infinite}
+  @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}
+  .busy.failed .label{color:var(--rec)} .busy.failed .bar{display:none}
+  .meta{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--muted)}
+  .cap{font-size:12px;color:var(--muted);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.7em}
+  .card a{font:500 11px var(--mono);color:var(--text);text-decoration:none;border-bottom:1px solid var(--line2);align-self:flex-start}
+  .card a:hover{border-color:var(--signal)}
+  .empty{border:1px dashed var(--line2);padding:40px 28px;color:var(--muted);max-width:520px;border-radius:3px}
+  .empty b{color:var(--text);font-weight:600}
+
+  /* ---------- log ---------- */
+  details{border-top:1px solid var(--line)}
+  summary{padding:14px 28px;cursor:pointer;list-style:none;display:flex;gap:10px;align-items:center}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"+";font:500 12px var(--mono);color:var(--muted);width:10px}
+  details[open] summary::before{content:"–"}
+  pre{font:12px/1.7 var(--mono);color:var(--muted);padding:0 28px 22px;max-height:240px;overflow:auto;white-space:pre-wrap}
+
+  .toast{position:fixed;right:24px;bottom:24px;background:var(--text);color:var(--bg);font:600 13px var(--display);
+    padding:12px 16px;border-radius:3px;transform:translateY(20px);opacity:0;transition:opacity .2s ease,transform .2s ease;pointer-events:none}
+  .toast.show{opacity:1;transform:none}
+  .offline{display:none;background:var(--rec);color:#fff;font:600 12px var(--mono);padding:8px 28px}
+  .offline.show{display:block}
+
+  @media (max-width:900px){
+    header{grid-template-columns:auto 1fr auto;gap:14px;padding:16px 18px} .who span{display:none}
+    .who h1{font-size:20px} .tc{font-size:15px} .tc small{display:none}
+    canvas{min-height:240px}
+    main{grid-template-columns:1fr} .chart,.clips{padding-left:18px;padding-right:18px}
+    .actions{margin-top:0}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="offline" id="offline">Lost connection to autoclip. Is the script still running?</div>
+
+<header>
+  <div class="rec on" id="rec"><i></i><span>REC</span></div>
+  <div class="who">
+    <h1 id="channel">—</h1>
+    <span id="captions">captions —</span>
+  </div>
+  <div class="tc mono" id="tc">00:00:00<small>ELAPSED</small></div>
+</header>
+
+<main>
+  <section class="chart">
+    <div class="chart-head">
+      <div>
+        <div class="label">Chat velocity · messages / 10 s</div>
+      </div>
+      <div class="legend">
+        <span><b style="background:var(--signal)"></b>chat</span>
+        <span><b style="background:var(--muted)"></b>baseline</span>
+        <span><b style="background:var(--rec)"></b>spike</span>
+      </div>
+    </div>
+    <canvas id="cv" aria-label="Chat messages per 10 seconds"></canvas>
+  </section>
+
+  <section class="rail">
+    <div class="big">
+      <div class="label">Right now</div>
+      <div class="n mono" id="now">0</div>
+      <div class="meter"><i id="meter"></i><u id="thresh"></u></div>
+      <div class="meter-cap"><span>0</span><span id="threshLbl">spike at —</span></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="label">Baseline</div><div class="v mono" id="avg">—</div></div>
+      <div class="stat"><div class="label">Peak</div><div class="v mono" id="peak">—</div></div>
+      <div class="stat"><div class="label">Clips</div><div class="v mono" id="count">0</div></div>
+      <div class="stat"><div class="label">Recorded</div><div class="v mono" id="size">0 MB</div></div>
+      <div class="stat"><div class="label">Chat</div><div class="v mono" id="chat" style="font-size:14px">—</div></div>
+      <div class="stat"><div class="label">Spikes</div><div class="v mono" id="spikes">0</div></div>
+    </div>
+    <div class="actions">
+      <button class="btn-clip" id="clipNow">Clip last 30 s <kbd>C</kbd></button>
+      <button class="btn-ghost" id="reveal">Open clips folder →</button>
+    </div>
+  </section>
+</main>
+
+<section class="clips">
+  <div class="clips-head"><h2>Clips</h2><span class="label" id="clipsSub">newest first</span></div>
+  <div class="strip" id="strip"></div>
+</section>
+
+<details>
+  <summary class="label">Log</summary>
+  <pre id="log"></pre>
+</details>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmtT = s => { s = Math.max(0, Math.floor(s)); return [s/3600|0, (s%3600)/60|0, s%60].map(v => String(v).padStart(2,"0")).join(":"); };
+const mb = b => (b/1048576 >= 1024 ? (b/1073741824).toFixed(2)+" GB" : (b/1048576).toFixed(0)+" MB");
+const ago = t => { const s = Date.now()/1000 - t; return s < 60 ? "just now" : s < 3600 ? Math.floor(s/60)+" min ago" : new Date(t*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); };
+let state = null, rendered = {};
+
+function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), 2200); }
+
+async function poll(){
+  try{
+    const r = await fetch("/api/state"); state = await r.json();
+    $("offline").classList.remove("show"); render();
+  }catch(e){ $("offline").classList.add("show"); $("rec").className = "rec off"; }
+}
+
+function render(){
+  const s = state, b = s.buckets, last = b[b.length-1] || {n:0, avg:0};
+  const cfg = s.settings, thr = Math.max(cfg.min_msgs, last.avg * cfg.spike_x);
+  $("rec").className = "rec " + (s.live ? "on" : "off");
+  $("channel").textContent = "twitch.tv/" + s.channel;
+  $("captions").textContent = s.captions ? "Groq captions on" : "captions off";
+  $("tc").firstChild.nodeValue = fmtT(s.now - s.started);
+  $("now").textContent = last.n; $("now").classList.toggle("hot", !!last.spike);
+  $("avg").textContent = b.length < 6 ? "learning…" : last.avg.toFixed(0);
+  $("peak").textContent = b.length ? Math.max(...b.map(x=>x.n)) : "—";
+  $("spikes").textContent = b.filter(x=>x.spike).length;
+  $("count").textContent = s.clips.filter(c=>c.status==="ready").length;
+  $("size").textContent = mb(s.rec_bytes || 0);
+  $("chat").innerHTML = s.chat_connected ? '<span class="dot" style="background:var(--signal)"></span>live' : '<span class="dot" style="background:var(--rec)"></span>offline';
+  const scale = Math.max(thr * 1.4, last.n * 1.1, 1);
+  $("meter").style.width = Math.min(100, last.n/scale*100) + "%";
+  $("meter").classList.toggle("hot", last.n >= thr && b.length >= 6);
+  $("thresh").style.left = Math.min(99, thr/scale*100) + "%";
+  $("threshLbl").textContent = b.length < 6 ? "learning baseline…" : "spike at " + Math.round(thr);
+  $("log").textContent = s.log.join("\n");
+  drawChart(b, cfg);
+  renderClips(s.clips);
+}
+
+function drawChart(b, cfg){
+  const cv = $("cv"), dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== W*dpr || cv.height !== H*dpr){ cv.width = W*dpr; cv.height = H*dpr; }
+  const g = cv.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
+  const css = getComputedStyle(document.documentElement), c = k => css.getPropertyValue(k).trim();
+  const padL = 34, padB = 22, padT = 10, w = W - padL, h = H - padB;
+  const pts = b.slice(-Math.max(30, Math.floor(w/9)));
+  const max = Math.max(10, ...pts.map(p => Math.max(p.n, p.avg * cfg.spike_x))) * 1.12;
+  const y = v => padT + (h - padT) - v/max*(h - padT);
+
+  // grid + y labels
+  g.font = "10px " + c("--mono"); g.fillStyle = c("--dim"); g.strokeStyle = c("--line"); g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++){ const v = max*i/4, yy = Math.round(y(v))+.5;
+    g.beginPath(); g.moveTo(padL, yy); g.lineTo(W, yy); g.stroke(); g.fillText(Math.round(v), 0, yy+3); }
+  if (!pts.length){ g.fillStyle = c("--muted"); g.font = "12px " + c("--mono"); g.fillText("waiting for the first 10 s of chat…", padL+12, h/2); return; }
+
+  const step = w / Math.max(pts.length, 30), bw = Math.max(2, step - 3);
+  const x0 = padL + w - pts.length*step;
+  // bars
+  pts.forEach((p,i) => { const x = x0 + i*step;
+    g.fillStyle = p.spike ? c("--rec") : "rgba(212,255,58,.85)";
+    g.fillRect(x, y(p.n), bw, h - y(p.n));
+    if (p.spike){ g.fillStyle = "rgba(255,59,47,.12)"; g.fillRect(x - 2, 0, bw + 4, h); }
+  });
+  // baseline + threshold
+  const line = (fn, color, dash) => { g.beginPath(); g.setLineDash(dash); g.strokeStyle = color; g.lineWidth = 1.5;
+    pts.forEach((p,i) => { const x = x0 + i*step + bw/2, yy = y(fn(p)); i ? g.lineTo(x,yy) : g.moveTo(x,yy); }); g.stroke(); g.setLineDash([]); };
+  if (pts.length > 1){ line(p => p.avg, c("--muted"), []); line(p => Math.max(cfg.min_msgs, p.avg*cfg.spike_x), "rgba(255,59,47,.55)", [4,4]); }
+  // time ticks (every minute)
+  g.fillStyle = c("--dim"); g.font = "10px " + c("--mono");
+  const every = Math.max(6, Math.ceil(70/step));
+  for (let i = pts.length - 1; i >= 0; i -= every){ const d = new Date(pts[i].t*1000), x = x0 + i*step;
+    if (x < padL + 20) break;
+    g.textAlign = "right"; g.fillText(d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}), x + bw, H - 6); g.textAlign = "left"; }
+}
+
+function renderClips(clips){
+  const strip = $("strip");
+  $("clipsSub").textContent = clips.length ? "newest first · click to play" : "";
+  if (!clips.length){
+    strip.innerHTML = '<div class="empty"><b>No clips yet.</b> When chat jumps past the red dashed line, a 30-second vertical clip lands here. Press <b>C</b> to clip the last 30 seconds yourself.</div>';
+    rendered = {}; return;
+  }
+  if (strip.querySelector(".empty")) strip.innerHTML = "";
+  clips.forEach((c, idx) => {
+    const key = c.name + ":" + c.status;
+    let el = document.getElementById("c-" + c.name);
+    if (el && rendered[c.name] === key){ el.querySelector(".when").textContent = ago(c.created); return; }
+    rendered[c.name] = key;
+    const ready = c.status === "ready";
+    const html = `
+      <div class="frame">
+        ${ready ? `<video src="/clips/${c.name}" preload="metadata" controls playsinline></video>`
+                : `<div class="busy ${c.status==="failed"?"failed":""}"><div class="label">${c.status==="failed"?"failed":c.status+"…"}</div><div class="bar"><i></i></div></div>`}
+        <span class="tag ${c.reason}">${c.reason === "spike" ? "spike · " + c.peak : c.reason}</span>
+      </div>
+      <div class="meta"><span class="when">${ago(c.created)}</span><span>${c.size ? mb(c.size) : ""}</span></div>
+      <div class="cap">${c.caption ? c.caption.replace(/</g,"&lt;") : (ready ? "—" : "")}</div>
+      ${ready ? `<a href="/clips/${c.name}" download>Download ↓</a>` : ""}`;
+    if (!el){ el = document.createElement("div"); el.className = "card"; el.id = "c-" + c.name; }
+    el.innerHTML = html;
+    const at = strip.children[idx];
+    if (at !== el) strip.insertBefore(el, at || null);
+  });
+}
+
+async function clipNow(){
+  try{ await fetch("/api/clip", {method:"POST"}); toast("Clipping the last 30 seconds…"); }
+  catch(e){ toast("Couldn't reach autoclip"); }
+}
+$("clipNow").onclick = clipNow;
+$("reveal").onclick = () => fetch("/api/reveal", {method:"POST"});
+addEventListener("keydown", e => { if ((e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
+addEventListener("resize", () => state && drawChart(state.buckets, state.settings));
+setInterval(() => { if (state){ state.now += 1; $("tc").firstChild.nodeValue = fmtT(state.now - state.started); } }, 1000);
+poll(); setInterval(poll, 2000);
+</script>
+</body>
+</html>
