@@ -103,19 +103,17 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0):
                        check=True)
         # 2) captions
         sub_filter, words = "", []
-        srt = raw.replace(".mp4", ".srt")
+        ass = raw.replace(".mp4", ".ass")
         if captions:
             set_clip(name, status="captioning")
             try:
                 words = groq_words(raw)
             except Exception as e:
                 log(f"captions failed ({e}) -> clip without captions")
-            write_srt(words, srt)
             if words:
-                esc = srt.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-                sub_filter = (f",subtitles='{esc}':force_style='Fontname=Arial,Fontsize=22,Bold=1,"
-                              "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=4,"
-                              "Alignment=2,MarginV=70'")
+                write_ass(words, ass)
+                # style lives inside the .ass file -> no quoting, works on every ffmpeg version
+                sub_filter = ",ass=" + re.sub(r"([\\:',\[\];])", r"\\\1", ass)
         # 3) 9:16 vertical: blurred background + full gameplay in the middle
         set_clip(name, status="rendering")
         vf = ("[0:v]setpts=PTS-STARTPTS,split[a][b];"
@@ -133,7 +131,7 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0):
         set_clip(name, status="failed")
         log(f"clip failed: {e}")
     finally:
-        for f in (raw, srt if captions else ""):
+        for f in (raw, raw.replace(".mp4", ".ass")):
             if f and os.path.exists(f):
                 os.remove(f)
 
@@ -155,16 +153,25 @@ def groq_words(video):
     return json.loads(r.stdout).get("words", [])
 
 
-def write_srt(words, srt, per=3):
-    """Shorts-style captions: 3 words at a time, uppercase."""
+def write_ass(words, path, per=3):
+    """Shorts-style captions: 3 words at a time, uppercase, big white with black outline,
+    placed just below the gameplay (1080x1920 canvas)."""
     def ts(t):
         h, m, s = int(t // 3600), int(t % 3600 // 60), t % 60
-        return f"{h:02d}:{m:02d}:{s:06.3f}".replace(".", ",")
-    with open(srt, "w") as f:
+        return f"{h}:{m:02d}:{s:05.2f}"
+    head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n\n"
+            "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+            "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, "
+            "Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            "Style: Cap,Arial Black,110,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,"
+            "7,2,2,60,60,470,1\n\n"
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    with open(path, "w") as f:
+        f.write(head)
         for i in range(0, len(words), per):
             chunk = words[i:i + per]
-            text = " ".join(w["word"].strip() for w in chunk).upper()
-            f.write(f"{i // per + 1}\n{ts(chunk[0]['start'])} --> {ts(chunk[-1]['end'])}\n{text}\n\n")
+            text = " ".join(w["word"].strip() for w in chunk).upper().replace("{", "(").replace("}", ")")
+            f.write(f"Dialogue: 0,{ts(chunk[0]['start'])},{ts(chunk[-1]['end'])},Cap,,0,0,0,,{text}\n")
 
 
 # ---------------------------------------------------------------- dashboard server
