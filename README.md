@@ -21,12 +21,13 @@ export GROQ_API_KEY=gsk_...   # free key: https://console.groq.com/keys
 ## Run
 
 ```bash
-python3 autoclip.py <channel>          # e.g. ohnepixel
-python3 autoclip.py <channel> --no-captions
+python3 autoclip.py                         # add channels in the dashboard
+python3 autoclip.py ohnepixel kaicenat      # or start with some
 ```
 
 The dashboard opens automatically at **http://localhost:8787**:
 
+- **add / remove channels** — record several streamers at once, one tab each
 - live chat-velocity chart with baseline, spike threshold and spike markers
 - current rate, baseline, peak, recorded size, chat status
 - **Clip last 30 s** button (or press `C`) for manual clips

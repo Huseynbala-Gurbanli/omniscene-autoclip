@@ -36,6 +36,32 @@
   .tc{font:500 22px var(--mono);letter-spacing:.04em}
   .tc small{display:block;font-size:10px;color:var(--muted);letter-spacing:.16em;text-align:right}
 
+  /* ---------- channel bar ---------- */
+  .chbar{display:flex;align-items:stretch;gap:0;border-bottom:1px solid var(--line);overflow-x:auto}
+  .chip{display:flex;align-items:center;gap:10px;padding:12px 18px;border-right:1px solid var(--line);
+    font:500 13px var(--mono);color:var(--muted);white-space:nowrap;transition:color .15s ease,background-color .15s ease;position:relative}
+  .chip:hover{color:var(--text);background:var(--panel)}
+  .chip.sel{color:var(--text);background:var(--panel)}
+  .chip.sel::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--signal)}
+  .chip .n{color:var(--dim);font-size:11px}
+  .chip .x{color:var(--dim);font-size:15px;line-height:1;padding:0 2px;margin-left:2px}
+  .chip .x:hover{color:var(--rec)}
+  .add{display:flex;align-items:center;gap:8px;padding:8px 14px;margin-left:auto;border-left:1px solid var(--line)}
+  .add input{background:var(--panel);border:1px solid var(--line2);color:var(--text);font:13px var(--mono);
+    padding:8px 10px;width:190px;border-radius:3px}
+  .add input::placeholder{color:var(--dim)}
+  .add input:focus{outline:none;border-color:var(--signal)}
+  .add button{font:700 12px var(--mono);padding:9px 12px;border-radius:3px;background:var(--signal);color:var(--bg)}
+  .add button:hover{background:var(--text)}
+  .hero-empty{padding:90px 28px;text-align:left;max-width:640px}
+  .hero-empty h2{font:800 40px/1.05 var(--display);letter-spacing:-.03em;margin-bottom:14px}
+  .hero-empty p{color:var(--muted);font-size:15px}
+  .hero-empty .sugg{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+  .hero-empty .sugg button{font:500 12px var(--mono);padding:8px 12px;border:1px solid var(--line2);border-radius:3px;color:var(--muted)}
+  .hero-empty .sugg button:hover{color:var(--text);border-color:var(--signal)}
+  .tag-ch{position:absolute;bottom:8px;left:8px;font:500 10px var(--mono);padding:3px 6px;background:rgba(11,11,12,.8);border-radius:2px;color:var(--text)}
+  .hidden{display:none!important}
+
   /* ---------- main grid ---------- */
   main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:1px;background:var(--line)}
   section{background:var(--bg)}
@@ -127,13 +153,26 @@
 <header>
   <div class="rec on" id="rec"><i></i><span>REC</span></div>
   <div class="who">
-    <h1 id="channel">—</h1>
+    <h1 id="channel">autoclip</h1>
     <span id="captions">captions —</span>
   </div>
   <div class="tc mono" id="tc">00:00:00<small>ELAPSED</small></div>
 </header>
 
-<main>
+<nav class="chbar" id="chbar">
+  <form class="add" id="addForm" autocomplete="off">
+    <input id="addInput" placeholder="add channel, e.g. kaicenat" aria-label="Twitch channel name" spellcheck="false">
+    <button type="submit">Add</button>
+  </form>
+</nav>
+
+<section class="hero-empty hidden" id="emptyHero">
+  <h2>Add a channel to start clipping.</h2>
+  <p>Type a Twitch channel above. Each one records on its own, watches its chat, and clips the moments chat goes wild.</p>
+  <div class="sugg" id="sugg"></div>
+</section>
+
+<main id="mainGrid">
   <section class="chart">
     <div class="chart-head">
       <div>
@@ -198,29 +237,75 @@ async function poll(){
   }catch(e){ $("offline").classList.add("show"); $("rec").className = "rec off"; }
 }
 
+let sel = null;
+const SUGG = ["ohnepixel","kaicenat","xqc","typicalgamer","quackity","ewroon"];
+
+function renderBar(s){
+  const bar = $("chbar"), names = Object.keys(s.channels);
+  if (!names.includes(sel)) sel = names[0] || null;
+  [...bar.querySelectorAll(".chip")].forEach(el => { if (!names.includes(el.dataset.name)) el.remove(); });
+  names.forEach(n => {
+    const c = s.channels[n], last = c.buckets[c.buckets.length-1];
+    let el = bar.querySelector(`.chip[data-name="${n}"]`);
+    if (!el){
+      el = document.createElement("button"); el.className = "chip"; el.dataset.name = n;
+      el.innerHTML = `<span class="dot"></span><span>${n}</span><span class="n"></span><span class="x" title="Remove ${n}">×</span>`;
+      el.onclick = e => { if (e.target.classList.contains("x")) removeCh(n); else { sel = n; render(); } };
+      bar.insertBefore(el, $("addForm"));
+    }
+    el.classList.toggle("sel", n === sel);
+    const col = c.status === "live" ? (c.chat_connected ? "var(--signal)" : "var(--amber)") : c.status === "starting" ? "var(--amber)" : "var(--rec)";
+    el.querySelector(".dot").style.background = col;
+    el.querySelector(".n").textContent = c.status === "live" ? (last ? last.n + "/10s" : "…") : c.status;
+  });
+  $("emptyHero").classList.toggle("hidden", !!names.length);
+  $("mainGrid").classList.toggle("hidden", !names.length);
+  $("sugg").innerHTML = SUGG.filter(n => !names.includes(n)).map(n => `<button data-n="${n}">+ ${n}</button>`).join("");
+}
+
 function render(){
-  const s = state, b = s.buckets, last = b[b.length-1] || {n:0, avg:0};
-  const cfg = s.settings, thr = Math.max(cfg.min_msgs, last.avg * cfg.spike_x);
-  $("rec").className = "rec " + (s.live ? "on" : "off");
-  $("channel").textContent = "twitch.tv/" + s.channel;
+  const s = state; renderBar(s);
   $("captions").textContent = s.captions ? "Groq captions on" : "captions off";
-  $("tc").firstChild.nodeValue = fmtT(s.now - s.started);
+  $("log").textContent = s.log.join("\n");
+  renderClips(s.clips);
+  const c = s.channels[sel];
+  if (!c){ $("rec").className = "rec off"; $("channel").textContent = "autoclip"; $("tc").firstChild.nodeValue = "00:00:00"; return; }
+  const b = c.buckets, last = b[b.length-1] || {n:0, avg:0};
+  const cfg = s.settings, thr = Math.max(cfg.min_msgs, last.avg * cfg.spike_x);
+  $("rec").className = "rec " + (c.status === "live" ? "on" : "off");
+  $("channel").textContent = "twitch.tv/" + c.name;
+  $("tc").firstChild.nodeValue = fmtT(s.now - c.started);
   $("now").textContent = last.n; $("now").classList.toggle("hot", !!last.spike);
-  $("avg").textContent = b.length < 6 ? "learning…" : last.avg.toFixed(0);
+  $("avg").textContent = c.status !== "live" ? c.status : b.length < 6 ? "learning…" : last.avg.toFixed(0);
   $("peak").textContent = b.length ? Math.max(...b.map(x=>x.n)) : "—";
   $("spikes").textContent = b.filter(x=>x.spike).length;
-  $("count").textContent = s.clips.filter(c=>c.status==="ready").length;
-  $("size").textContent = mb(s.rec_bytes || 0);
-  $("chat").innerHTML = s.chat_connected ? '<span class="dot" style="background:var(--signal)"></span>live' : '<span class="dot" style="background:var(--rec)"></span>offline';
+  $("count").textContent = s.clips.filter(x=>x.status==="ready" && x.channel===c.name).length;
+  $("size").textContent = mb(c.rec_bytes || 0);
+  $("chat").innerHTML = c.chat_connected ? '<span class="dot" style="background:var(--signal)"></span>live' : '<span class="dot" style="background:var(--rec)"></span>offline';
   const scale = Math.max(thr * 1.4, last.n * 1.1, 1);
   $("meter").style.width = Math.min(100, last.n/scale*100) + "%";
   $("meter").classList.toggle("hot", last.n >= thr && b.length >= 6);
   $("thresh").style.left = Math.min(99, thr/scale*100) + "%";
   $("threshLbl").textContent = b.length < 6 ? "learning baseline…" : "spike at " + Math.round(thr);
-  $("log").textContent = s.log.join("\n");
   drawChart(b, cfg);
-  renderClips(s.clips);
 }
+
+async function api(path, body){
+  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body||{})});
+  const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.error || "failed"); return j;
+}
+async function addCh(name){
+  name = name.trim().toLowerCase().replace(/^.*twitch\.tv\//,"").replace(/[^a-z0-9_]/g,"");
+  if (!name) return;
+  try{ const j = await api("/api/channels", {name}); sel = j.name; toast("Added " + j.name); $("addInput").value = ""; poll(); }
+  catch(e){ toast(name + ": " + e.message); }
+}
+async function removeCh(n){
+  if (!confirm("Stop recording " + n + "?")) return;
+  await api("/api/channels/remove", {name:n}).catch(()=>{}); if (sel === n) sel = null; toast("Removed " + n); poll();
+}
+$("addForm").onsubmit = e => { e.preventDefault(); addCh($("addInput").value); };
+$("sugg").onclick = e => { const n = e.target.dataset && e.target.dataset.n; if (n) addCh(n); };
 
 function drawChart(b, cfg){
   const cv = $("cv"), dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
@@ -277,6 +362,7 @@ function renderClips(clips){
         ${ready ? `<video src="/clips/${c.name}" preload="metadata" controls playsinline></video>`
                 : `<div class="busy ${c.status==="failed"?"failed":""}"><div class="label">${c.status==="failed"?"failed":c.status+"…"}</div><div class="bar"><i></i></div></div>`}
         <span class="tag ${c.reason}">${c.reason === "spike" ? "spike · " + c.peak : c.reason}</span>
+        ${c.channel ? `<span class="tag-ch">${c.channel}</span>` : ""}
       </div>
       <div class="meta"><span class="when">${ago(c.created)}</span><span>${c.size ? mb(c.size) : ""}</span></div>
       <div class="cap">${c.caption ? c.caption.replace(/</g,"&lt;") : (ready ? "—" : "")}</div>
@@ -289,14 +375,15 @@ function renderClips(clips){
 }
 
 async function clipNow(){
-  try{ await fetch("/api/clip", {method:"POST"}); toast("Clipping the last 30 seconds…"); }
-  catch(e){ toast("Couldn't reach autoclip"); }
+  if (!sel) return toast("Add a channel first");
+  try{ await api("/api/clip", {name: sel}); toast("Clipping the last 30 s of " + sel + "…"); }
+  catch(e){ toast(e.message); }
 }
 $("clipNow").onclick = clipNow;
 $("reveal").onclick = () => fetch("/api/reveal", {method:"POST"});
-addEventListener("keydown", e => { if ((e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
+addEventListener("keydown", e => { if (e.target.tagName !== "INPUT" && (e.key === "c" || e.key === "C") && !e.metaKey && !e.ctrlKey && !/INPUT|TEXTAREA/.test(e.target.tagName)) clipNow(); });
 addEventListener("resize", () => state && drawChart(state.buckets, state.settings));
-setInterval(() => { if (state){ state.now += 1; $("tc").firstChild.nodeValue = fmtT(state.now - state.started); } }, 1000);
+setInterval(() => { if (state && state.channels[sel]){ state.now += 1; $("tc").firstChild.nodeValue = fmtT(state.now - state.channels[sel].started); } }, 1000);
 poll(); setInterval(poll, 2000);
 </script>
 </body>
