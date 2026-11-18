@@ -314,7 +314,8 @@
 
   <section class="block">
     <div class="h2"><h2>Your clips</h2><span id="clipCount"></span>
-      <div class="seg right" id="sort"><button data-s="new" class="sel">Newest</button><button data-s="best">Best first</button></div></div>
+      <button class="btn sm right" id="openFolder" title="">📂 Open folder</button>
+      <div class="seg" id="sort"><button data-s="new" class="sel">Newest</button><button data-s="best">Best first</button></div></div>
     <div class="grid" id="grid"></div>
     <div class="empty hidden" id="empty">
       <div><b>1</b><h4>Paste a link</h4><p>A Twitch, Kick or YouTube live stream, or any video.</p></div>
@@ -672,6 +673,7 @@ function renderClips(){
         ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
         ${ok ? `<div class="row"><a class="btn sm solid" href="/clips/${c.name}?v=${c.version || 0}" download="${c.name}">Download</a><button class="btn sm" data-edit="${c.name}">Edit</button>
           ${c.title ? `<button class="btn sm" data-copy="${c.name}">Copy caption</button>` : ""}
+          <button class="btn sm del" data-show="${c.name}" title="Show in Finder" aria-label="Show in Finder">📂</button>
           <button class="btn sm del" data-del="${c.name}" title="Delete" aria-label="Delete clip">🗑</button></div>` : ""}`;
       if (!el){ el = document.createElement("div"); el.className = "card"; el.id = "c-" + c.name; }
       el.innerHTML = html;
@@ -682,6 +684,7 @@ function renderClips(){
 $("grid").onclick = async e => {
   const cp = e.target.dataset.copy, del = e.target.dataset.del, ed = e.target.dataset.edit;
   if (ed) return openEditor(ed);
+  if (e.target.dataset.show) return api("/api/reveal", {name: e.target.dataset.show});
   if (cp){ const c = S.clips.find(x => x.name === cp);
     try { await navigator.clipboard.writeText(postText(c)); toast("Title, caption and hashtags copied"); } catch(_) { toast("Couldn't copy"); } }
   if (del && confirm("Delete this clip?")){ await api("/api/clips/delete", {name: del}); delete cache[del]; poll(); }
@@ -899,8 +902,11 @@ $("mkGo").onclick = async () => {
   catch(e){ toast(e.message); }
 };
 
+$("openFolder").onclick = () => api("/api/reveal", {}).then(j => toast("Opened " + j.path));
+
 function render(){
   renderCfg();
+  if (S.folder) $("openFolder").title = S.folder;
   initSettings(); renderSetup(); renderLive(); renderJobs(); renderClips();
   $("log").textContent = (S.log || []).slice().reverse().join("\n");
 }

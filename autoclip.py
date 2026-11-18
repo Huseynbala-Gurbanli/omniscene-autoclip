@@ -1713,8 +1713,13 @@ def make_handler(out_dir):
                 save_style(st)
                 return self._send(200, st)
             if path == "/api/reveal":
-                subprocess.run(["open", out_dir])
-                return self._send(200, {"ok": True})
+                n = str(body.get("name", ""))
+                fp = os.path.join(out_dir, n)
+                if re.fullmatch(r"[\w-]+\.mp4", n) and os.path.exists(fp):
+                    subprocess.run(["open", "-R", fp])          # Finder, with the clip selected
+                else:
+                    subprocess.run(["open", os.path.abspath(out_dir)])
+                return self._send(200, {"ok": True, "path": os.path.abspath(out_dir)})
             self._send(404, {"error": "not found"})
 
         def _video(self, fp):
