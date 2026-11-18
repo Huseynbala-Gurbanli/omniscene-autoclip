@@ -14,6 +14,7 @@ Auto-clips Twitch livestreams into vertical Shorts/Reels when chat spikes.
 
 ```bash
 brew install streamlink ffmpeg
+pip3 install pillow
 export GROQ_API_KEY=gsk_...   # free key: https://console.groq.com/keys
 ```
 

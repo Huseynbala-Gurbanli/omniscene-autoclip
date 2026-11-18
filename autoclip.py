@@ -11,12 +11,13 @@ autoclip.py - auto-clip Twitch streams when chat spikes.
 
 Setup (Mac):
   brew install streamlink ffmpeg
+  pip3 install pillow
   export GROQ_API_KEY=gsk_...      # free key: console.groq.com/keys
 
 Run:
   python3 autoclip.py ohnepixel
 """
-import argparse, json, os, re, socket, subprocess, threading, time, webbrowser
+import argparse, json, os, re, shutil, socket, subprocess, threading, time, webbrowser
 from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -103,26 +104,30 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0):
                        check=True)
         # 2) captions
         sub_filter, words = "", []
-        ass = raw.replace(".mp4", ".ass")
+        capdir = raw.replace(".mp4", "_caps")
         if captions:
             set_clip(name, status="captioning")
             try:
                 words = groq_words(raw)
             except Exception as e:
                 log(f"captions failed ({e}) -> clip without captions")
-            if words:
-                write_ass(words, ass)
-                # style lives inside the .ass file -> no quoting, works on every ffmpeg version
-                sub_filter = ",ass=" + re.sub(r"([\\:',\[\];])", r"\\\1", ass)
         # 3) 9:16 vertical: blurred background + full gameplay in the middle
         set_clip(name, status="rendering")
         vf = ("[0:v]setpts=PTS-STARTPTS,split[a][b];"
               "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];"
               "[b]scale=1080:-2[fg];"
-              f"[bg][fg]overlay=(W-w)/2:(H-h)/2{sub_filter}[v]")
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-filter_complex", vf,
-                        "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
-                        "-crf", "20", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", final],
+              "[bg][fg]overlay=(W-w)/2:(H-h)/2")
+        inputs = ["-i", raw]
+        if words:
+            # captions = transparent PNGs played as a 2nd video track -> needs no libass/drawtext
+            playlist = render_captions(words, capdir)
+            inputs += ["-f", "concat", "-safe", "0", "-i", playlist]
+            vf += "[base];[base][1:v]overlay=0:0:eof_action=repeat"
+        vf += "[v]"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", vf,
+                        "-map", "[v]", "-map", "0:a?", "-t", str(CLIP_LEN), "-c:v", "libx264",
+                        "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", final],
                        check=True)
         set_clip(name, status="ready", size=os.path.getsize(final),
                  caption=" ".join(w["word"].strip() for w in words)[:140])
@@ -131,9 +136,9 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0):
         set_clip(name, status="failed")
         log(f"clip failed: {e}")
     finally:
-        for f in (raw, raw.replace(".mp4", ".ass")):
-            if f and os.path.exists(f):
-                os.remove(f)
+        if os.path.exists(raw):
+            os.remove(raw)
+        shutil.rmtree(capdir, ignore_errors=True)
 
 
 def groq_words(video):
@@ -153,25 +158,44 @@ def groq_words(video):
     return json.loads(r.stdout).get("words", [])
 
 
-def write_ass(words, path, per=3):
-    """Shorts-style captions: 3 words at a time, uppercase, big white with black outline,
-    placed just below the gameplay (1080x1920 canvas)."""
-    def ts(t):
-        h, m, s = int(t // 3600), int(t % 3600 // 60), t % 60
-        return f"{h}:{m:02d}:{s:05.2f}"
-    head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n\n"
-            "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
-            "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, "
-            "Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            "Style: Cap,Arial Black,110,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,"
-            "7,2,2,60,60,470,1\n\n"
-            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
-    with open(path, "w") as f:
-        f.write(head)
-        for i in range(0, len(words), per):
-            chunk = words[i:i + per]
-            text = " ".join(w["word"].strip() for w in chunk).upper().replace("{", "(").replace("}", ")")
-            f.write(f"Dialogue: 0,{ts(chunk[0]['start'])},{ts(chunk[-1]['end'])},Cap,,0,0,0,,{text}\n")
+FONTS = ["/System/Library/Fonts/Supplemental/Arial Black.ttf",
+         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+         "/Library/Fonts/Arial Bold.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+
+
+def render_captions(words, outdir, per=3, size=96):
+    """Shorts-style captions: 3 words at a time, uppercase, white with thick black outline,
+    just below the gameplay. Each chunk -> transparent 1080x1920 PNG; returns concat playlist."""
+    from PIL import Image, ImageDraw, ImageFont
+    os.makedirs(outdir, exist_ok=True)
+    font = next((ImageFont.truetype(f, size) for f in FONTS if os.path.exists(f)), None) \
+        or ImageFont.load_default()
+    blank = os.path.abspath(os.path.join(outdir, "blank.png"))
+    Image.new("RGBA", (1080, 1920), (0, 0, 0, 0)).save(blank)
+    lines, t = [], 0.0
+    for i in range(0, len(words), per):
+        chunk = words[i:i + per]
+        start, end = float(chunk[0]["start"]), float(chunk[-1]["end"])
+        if start > t:
+            lines += [f"file '{blank}'", f"duration {start - t:.3f}"]
+        img = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        text = " ".join(w["word"].strip() for w in chunk).upper()
+        f = font
+        while d.textlength(text, font=f) > 1000 and getattr(f, "size", 0) > 40:   # shrink long chunks
+            f = f.font_variant(size=f.size - 6)
+        d.text((540, 1440), text, font=f, anchor="mm", fill="white",
+               stroke_width=9, stroke_fill="black")
+        png = os.path.join(outdir, f"c{i:04d}.png")
+        img.save(png)
+        lines += [f"file '{os.path.abspath(png)}'", f"duration {max(0.05, end - max(start, t)):.3f}"]
+        t = max(end, t)
+    lines += [f"file '{blank}'", "duration 0.1", f"file '{blank}'"]
+    playlist = os.path.join(outdir, "caps.txt")
+    with open(playlist, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return playlist
 
 
 # ---------------------------------------------------------------- dashboard server
@@ -282,6 +306,12 @@ def main():
     load_existing(a.out)
     rec = os.path.join(a.out, f"{a.channel}_{datetime.now():%Y%m%d_%H%M}.ts")
     captions = not a.no_captions and bool(os.environ.get("GROQ_API_KEY"))
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        if captions:
+            print("Pillow missing -> run:  pip3 install pillow   (captions off for now)")
+        captions = False
     STATE.update(channel=a.channel, started=time.time(), recording=rec, live=True,
                  captions=captions,
                  settings={"window": WINDOW, "spike_x": SPIKE_X, "min_msgs": MIN_MSGS,
@@ -310,6 +340,9 @@ def main():
             if MANUAL.is_set():          # "Clip now" pressed on the dashboard
                 MANUAL.clear()
                 now = time.time() - t0
+                if now < 15:
+                    log("too early to clip - wait until 15 s of stream is recorded")
+                    continue
                 log("✂️  manual clip")
                 fire(now - CLIP_LEN, "manual", 0)
                 continue
