@@ -298,12 +298,34 @@ class Channel:
         threading.Thread(target=make_clip, args=(self.rec, start, CTX["out"], name, captions_ready(),
                                                  reason, peak, self.key), daemon=True).start()
 
+    def _recorders(self):
+        """Every streamlink we can find: the private env's first, then Homebrew/system ones."""
+        found = []
+        for p in [os.path.join(os.path.dirname(VENV_PY), "streamlink"), shutil.which("streamlink"),
+                  "/opt/homebrew/bin/streamlink", "/usr/local/bin/streamlink"]:
+            if p and os.path.exists(p) and os.path.realpath(p) not in [os.path.realpath(f) for f in found]:
+                found.append(p)
+        return found or ["streamlink"]
+
+    def _start_recorder(self, exe):
+        extra = ["--twitch-disable-ads"] if self.platform == "twitch" else []
+        self.rec_log = self.rec + ".log"
+        self.proc = subprocess.Popen([exe, *extra, self.url, "best", "-o", self.rec, "-f"],
+                                     stdout=subprocess.DEVNULL, stderr=open(self.rec_log, "w"))
+
+    def _recorder_error(self):
+        try:
+            with open(self.rec_log) as f:
+                lines = [l.strip() for l in f if l.strip()]
+        except OSError:
+            return ""
+        err = [l for l in lines if re.search(r"error|no playable|unable|could not|failed|traceback", l, re.I)]
+        return (err or lines or [""])[-1][:220]
+
     def _loop(self):
         log(f"recording {self.url}")
-        extra = ["--twitch-disable-ads"] if self.platform == "twitch" else []
-        self.proc = subprocess.Popen(
-            ["streamlink", *extra, self.url, "best", "-o", self.rec, "-f"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        recorders = self._recorders()
+        self._start_recorder(recorders.pop(0))
         self.set(status="live")
         hist, last_clip = deque(maxlen=HISTORY), -COOLDOWN
         while not self.stop.is_set():
@@ -312,8 +334,14 @@ class Channel:
                 break
             if self.proc.poll() is not None:
                 started_ok = os.path.exists(self.rec) and os.path.getsize(self.rec) > 0
-                self.set(status="ended" if started_ok else "offline")
-                log(f"{self.key}: " + ("stream ended" if started_ok else "offline or not found"))
+                err = self._recorder_error()
+                if not started_ok and recorders:        # this streamlink failed -> try another one
+                    exe = recorders.pop(0)
+                    log(f"{self.key}: recorder failed ({err or 'no output'}), retrying with {exe}")
+                    self._start_recorder(exe)
+                    continue
+                self.set(status="ended" if started_ok else "offline", error=err)
+                log(f"{self.key}: " + ("stream ended" if started_ok else "can't record") + (f" - {err}" if err else ""))
                 break
             now = time.time() - self.t0
             if self.manual.is_set():

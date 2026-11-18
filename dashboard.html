@@ -386,7 +386,7 @@ document.querySelectorAll("[data-ex]").forEach(b => b.onclick = () => { $("link"
 /* ---------- live ---------- */
 function liveStatus(c){
   if (c.status === "starting") return ["warn", "Connecting…"];
-  if (c.status === "offline") return ["", "Not live right now"];
+  if (c.status === "offline") return ["warn", c.error && !/no playable streams/i.test(c.error) ? "Couldn't record: " + c.error : "Not live right now"];
   if (c.status === "ended") return ["", "Stream ended"];
   if (c.chat_note) return ["warn", "Recording · use Clip now (can't read this chat)"];
   if (!c.chat_connected) return ["warn", "Recording · connecting to chat…"];
@@ -431,7 +431,7 @@ function renderPlayer(el, key){
   if (src === el._src) return;
   el._src = src;
   if (src) box.innerHTML = `<iframe src="${esc(src)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="${esc(c.label || key)} live"></iframe>`;
-  else box.innerHTML = `<div class="ph">${c.status === "offline" ? "Not live right now" : c.status === "ended" ? "Stream ended" :
+  else box.innerHTML = `<div class="ph">${c.status === "offline" ? (c.error && !/no playable streams/i.test(c.error) ? "Couldn't record this stream" : "Not live right now") : c.status === "ended" ? "Stream ended" :
     c.platform === "youtube" ? "Finding the live video…" : "Loading the live video…"}<a href="${esc(c.url)}" target="_blank" rel="noopener" style="color:var(--text)">Open on ${PF[c.platform] ? PF[c.platform][0] + PF[c.platform].slice(1).toLowerCase() : "the site"} ↗</a></div>`;
 }
 function spark(cv, b){
