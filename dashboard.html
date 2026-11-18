@@ -80,6 +80,21 @@
   .lc .top a{margin-left:auto;font-size:13px;color:var(--muted);text-decoration:none;white-space:nowrap}
   .lc .top a:hover{color:var(--text)}
   .lc .acts .vid{flex:none}
+  .ctl{display:grid;gap:10px;padding-top:12px;border-top:1px solid var(--line)}
+  .ctl .r{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ctl .lbl{font-size:14px;color:var(--muted);min-width:96px}
+  .seg.go button{color:var(--text);font-weight:600}
+  .seg.go button:hover{background:var(--go);color:var(--bg)}
+  .seg.pick button.sel{background:var(--go);color:var(--bg)}
+  .mark{padding:8px 14px;border-radius:10px;border:1px solid var(--line2);font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
+  .mark i{width:10px;height:10px;border-radius:50%;background:var(--hot)}
+  .mark.on{background:var(--hot);border-color:var(--hot);color:#fff} .mark.on i{background:#fff;border-radius:2px}
+  .mark:hover{border-color:var(--muted)}
+  .linkbtn{font-size:13px;color:var(--muted)} .linkbtn:hover{color:var(--text)}
+  .stopbtn{margin-left:auto;font-size:13px;color:var(--muted);padding:6px 10px;border-radius:8px;border:1px solid var(--line)}
+  .stopbtn:hover{color:var(--hot);border-color:var(--hot)}
+  .opt{display:grid;gap:8px;margin-bottom:14px} .opt .lbl{font-size:14px;color:var(--muted)}
+  .aitest{margin-top:10px;font-size:14px;display:grid;gap:4px}
   .lc{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;display:grid;gap:12px}
   .lc .top{display:flex;align-items:center;gap:10px;min-width:0}
   .lc .name{font:700 19px var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -267,6 +282,14 @@
     <h2>Settings</h2>
     <p class="lead">Changes apply to new clips and save automatically.</p>
 
+    <h3>Auto-clips</h3>
+    <div class="opt"><span class="lbl">How long each auto-clip is</span>
+      <div class="seg pick" id="cfgLen"><button data-v="20">20s</button><button data-v="30">30s</button><button data-v="45">45s</button><button data-v="60">60s</button><button data-v="90">90s</button></div></div>
+    <div class="opt"><span class="lbl">How much to include before the moment</span>
+      <div class="seg pick" id="cfgLead"><button data-v="10">10s</button><button data-v="20">20s</button><button data-v="30">30s</button></div></div>
+    <div class="opt"><span class="lbl">Wait between auto-clips</span>
+      <div class="seg pick" id="cfgCool"><button data-v="30">30s</button><button data-v="60">1 min</button><button data-v="120">2 min</button><button data-v="300">5 min</button></div></div>
+
     <h3>Caption style</h3>
     <div class="tiles" id="styles"></div>
 
@@ -300,6 +323,8 @@
     <details id="setupDetails">
       <summary>Setup check</summary>
       <div class="check" id="check"></div>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn sm solid" id="testAi">Test AI now</button><span class="linkbtn" id="testAiNote">Makes a real call to Groq</span></div>
+      <div class="aitest hidden" id="aiResult"></div>
       <form id="keyForm2" autocomplete="off" style="display:flex;gap:8px;margin-top:12px">
         <input id="keyIn2" type="password" placeholder="Replace Groq key: gsk_…" style="flex:1;background:var(--panel);border:1px solid var(--line2);color:var(--text);border-radius:10px;padding:10px;font:13px var(--mono)">
         <button class="btn sm" type="submit">Save</button>
@@ -320,6 +345,7 @@ const $ = id => document.getElementById(id);
 const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ago = t => { const s = Date.now()/1000 - t; return s < 60 ? "just now" : s < 3600 ? Math.floor(s/60) + " min ago" : s < 86400 ? Math.floor(s/3600) + " h ago" : new Date(t*1000).toLocaleDateString(); };
 const PF = {twitch:"TWITCH", kick:"KICK", youtube:"YOUTUBE"};
+const fmtSec = s => { s = Math.max(0, Math.round(s)); return Math.floor(s/60) + ":" + String(s%60).padStart(2, "0"); };
 let S = null, sortBy = "new", style = null, cache = {};
 
 function toast(m){ const t = $("toast"); t.textContent = m; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
@@ -406,12 +432,30 @@ function renderLive(){
       el.innerHTML = `<div class="top"><span class="pf ${c.platform}">${PF[c.platform] || ""}</span><span class="name">${esc(c.label || c.name)}</span>
           <a href="${esc(c.url)}" target="_blank" rel="noopener">Open ↗</a></div>
         <div class="player"><div class="ph">Loading the live video…</div></div>
-        <div class="status"><span class="dot"></span><span class="st"></span></div>
+        <div class="status"><span class="dot"></span><span class="st"></span><button class="linkbtn" data-act="vid" style="margin-left:auto">Hide video</button></div>
         <canvas aria-hidden="true"></canvas>
-        <div class="acts"><button class="btn solid sm" data-act="clip">✂ Clip now</button><button class="btn sm vid" data-act="vid">Hide video</button><button class="btn sm" data-act="stop">Stop</button></div>`;
+        <div class="ctl">
+          <div class="r"><span class="lbl">Clip the last</span>
+            <div class="seg go"><button data-sec="15">15s</button><button data-sec="30">30s</button><button data-sec="60">60s</button><button data-sec="120">2 min</button></div></div>
+          <div class="r"><span class="lbl">Or mark it</span>
+            <button class="mark" data-act="mark"><i></i><span>Start clip</span></button>
+            <button class="linkbtn hidden" data-act="cancel">cancel</button></div>
+          <div class="r"><label class="tg" style="gap:10px;color:var(--text)"><input type="checkbox" data-act="auto">Auto-clip when chat gets loud</label></div>
+          <div class="r autorow"><span class="lbl">Sensitivity</span>
+            <div class="seg pick" data-act="sens"><button data-s="low">Only huge moments</button><button data-s="medium">Normal</button><button data-s="high">More clips</button></div>
+            <button class="stopbtn" data-act="stop">Stop watching</button></div>
+        </div>`;
       el.querySelector('[data-act="vid"]').onclick = e => { el._hide = !el._hide; e.target.textContent = el._hide ? "Show video" : "Hide video"; el._src = null; renderPlayer(el, c.name); };
-      el.querySelector('[data-act="clip"]').onclick = () => api("/api/clip", {name: c.name}).then(() => toast("Clipping the last 30 seconds…")).catch(err => toast(err.message));
-      el.querySelector('[data-act="stop"]').onclick = () => api("/api/channels/remove", {name: c.name}).then(() => { toast("Stopped " + (c.label || c.name)); poll(); });
+      el.querySelectorAll("[data-sec]").forEach(b => b.onclick = () => api("/api/clip", {name: c.name, seconds: +b.dataset.sec})
+        .then(() => toast(`Clipping the last ${b.textContent}…`)).catch(err => toast(err.message)));
+      el.querySelector('[data-act="mark"]').onclick = () => { const live = S.channels[c.name], on = live && live.mark != null;
+        api("/api/clip", {name: c.name, mark: on ? "end" : "start"}).then(() => { toast(on ? "Got it. Making your clip…" : "Recording your clip. Press End when the moment is over."); poll(); }).catch(err => toast(err.message)); };
+      el.querySelector('[data-act="cancel"]').onclick = () => api("/api/clip", {name: c.name, mark: "cancel"}).then(poll);
+      el.querySelector('[data-act="auto"]').onchange = e => api("/api/channel/settings", {name: c.name, auto: e.target.checked})
+        .then(() => toast(e.target.checked ? "Auto-clip on" : "Auto-clip off. Only your clips will be made."));
+      el.querySelector('[data-act="sens"]').onclick = e => { const v = e.target.dataset.s; if (v) api("/api/channel/settings", {name: c.name, sensitivity: v}).then(poll); };
+      el.querySelector('[data-act="stop"]').onclick = () => { if (confirm("Stop watching " + (c.label || c.name) + "?"))
+        api("/api/channels/remove", {name: c.name}).then(() => { toast("Stopped " + (c.label || c.name)); poll(); }); };
       box.appendChild(el);
     }
     const [cls, txt] = liveStatus(c);
@@ -420,6 +464,13 @@ function renderLive(){
     el.querySelector(".st").textContent = txt + (n ? ` · ${n} clip${n > 1 ? "s" : ""}` : "");
     spark(el.querySelector("canvas"), c.buckets);
     renderPlayer(el, c.name);
+    const marking = c.mark != null, mk = el.querySelector('[data-act="mark"]');
+    mk.classList.toggle("on", marking);
+    mk.querySelector("span").textContent = marking ? "End clip · " + fmtSec(Date.now()/1000 - (c.mark_at || Date.now()/1000)) : "Start clip";
+    el.querySelector('[data-act="cancel"]').classList.toggle("hidden", !marking);
+    const au = el.querySelector('[data-act="auto"]'); if (document.activeElement !== au) au.checked = !!c.auto;
+    el.querySelector(".autorow .seg").style.opacity = c.auto ? 1 : .4;
+    el.querySelectorAll('[data-act="sens"] button').forEach(b => b.classList.toggle("sel", b.dataset.s === c.sensitivity));
   });
 }
 function renderPlayer(el, key){
@@ -563,11 +614,35 @@ function closeSet(){ $("drawer").classList.remove("open"); $("scrim").classList.
 $("openSet").onclick = openSet; $("closeSet").onclick = closeSet; $("scrim").onclick = closeSet;
 addEventListener("keydown", e => { if (e.key === "Escape") closeSet(); });
 
+function renderCfg(){
+  const cfg = S.clip_cfg || {};
+  [["cfgLen","length"],["cfgLead","lead"],["cfgCool","cooldown"]].forEach(([id, k]) =>
+    document.querySelectorAll("#" + id + " button").forEach(b => b.classList.toggle("sel", +b.dataset.v === cfg[k])));
+}
+[["cfgLen","length"],["cfgLead","lead"],["cfgCool","cooldown"]].forEach(([id, k]) => $(id).onclick = e => {
+  const v = e.target.dataset.v; if (!v) return; S.clip_cfg = {...S.clip_cfg, [k]: +v}; renderCfg();
+  api("/api/clip_settings", {[k]: +v}).then(() => toast("Saved"));
+});
+$("testAi").onclick = async () => {
+  const r = $("aiResult"); $("testAi").textContent = "Testing…"; r.classList.add("hidden");
+  try {
+    const j = await api("/api/test_ai");
+    const line = (n, v) => `<div><span class="${v === "ok" ? "ok" : "no"}">${v === "ok" ? "✓" : "✗"}</span> ${n}: ${v === "ok" ? "works" : esc(v)}</div>`;
+    r.innerHTML = line("Captions (speech to text)", j.stt) + line("Titles + scores", j.llm) +
+      (j.sample && j.sample.title ? `<div style="color:var(--muted)">Example title: “${esc(j.sample.title)}” · score ${j.sample.score}</div>` : "");
+    r.classList.remove("hidden");
+  } catch(e){ r.textContent = e.message; r.classList.remove("hidden"); }
+  $("testAi").textContent = "Test AI now";
+};
+
 function render(){
+  renderCfg();
   initSettings(); renderSetup(); renderLive(); renderJobs(); renderClips();
   $("log").textContent = (S.log || []).slice().reverse().join("\n");
 }
 poll(); setInterval(poll, 2000);
+setInterval(() => { if (S) document.querySelectorAll(".lc").forEach(el => { const c = S.channels[el.dataset.k];
+  if (c && c.mark != null) el.querySelector('[data-act="mark"] span').textContent = "End clip · " + fmtSec(Date.now()/1000 - c.mark_at); }); }, 1000);
 </script>
 </body>
 </html>

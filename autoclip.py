@@ -46,7 +46,9 @@ STATE = {"captions": False, "settings": {}, "channels": {}, "clips": [], "log": 
 STATE_LOCK = threading.Lock()
 CHANNELS = {}      # name -> Channel
 CTX = {}           # out dir, captions flag
-RENDER_SLOTS = threading.Semaphore(2)   # max clips rendering at once (keeps the Mac responsive)
+RENDER_SLOTS = threading.Semaphore(2)
+SENSITIVITY = {"low": (3.5, 25), "medium": (2.5, 15), "high": (1.8, 10)}   # (x baseline, min msgs/10s)
+CLIP_CFG = {"length": 30, "lead": 20, "cooldown": 60}                       # auto-clip defaults   # max clips rendering at once (keeps the Mac responsive)
 
 
 def log(msg):
@@ -113,7 +115,9 @@ class Channel:
         self.chat_proc = None
         self.view = {"name": self.key, "label": slug, "platform": platform, "url": url,
                      "started": self.t0, "recording": self.rec, "rec_bytes": 0, "status": "starting",
-                     "chat_connected": False, "chat_note": "", "buckets": [], "embed": self._embed()}
+                     "chat_connected": False, "chat_note": "", "buckets": [], "embed": self._embed(),
+                     "auto": True, "sensitivity": "medium", "mark": None, "recorded": 0}
+        self.requests, self.rec_t0 = [], None
 
     @property
     def name(self):
@@ -293,10 +297,21 @@ class Channel:
             if os.path.exists(out):
                 os.remove(out)
 
-    def _fire(self, start, reason, peak):
+    def _fire(self, start, reason, peak, length=None):
         name = f"{self.file_id}_{datetime.now():%Y%m%d_%H%M%S}.mp4"
         threading.Thread(target=make_clip, args=(self.rec, start, CTX["out"], name, captions_ready(),
-                                                 reason, peak, self.key), daemon=True).start()
+                                                 reason, peak, self.key),
+                         kwargs={"length": length}, daemon=True).start()
+
+    def rec_pos(self):
+        """Seconds of stream recorded so far (clock starts when the first bytes land)."""
+        return time.time() - self.rec_t0 if self.rec_t0 else 0.0
+
+    def request(self, **req):
+        """Manual actions from the dashboard: {'seconds': 30} or {'mark': 'start'|'end'}."""
+        with self.lock:
+            self.requests.append(req)
+        self.manual.set()
 
     def _recorders(self):
         """Every streamlink we can find: the private env's first, then Homebrew/system ones."""
@@ -328,8 +343,9 @@ class Channel:
         self._start_recorder(recorders.pop(0))
         self.set(status="live")
         hist, last_clip = deque(maxlen=HISTORY), -COOLDOWN
+        next_tick = time.time() + WINDOW
         while not self.stop.is_set():
-            self.manual.wait(WINDOW)
+            self.manual.wait(max(0.05, next_tick - time.time()))
             if self.stop.is_set():
                 break
             if self.proc.poll() is not None:
@@ -343,30 +359,59 @@ class Channel:
                 self.set(status="ended" if started_ok else "offline", error=err)
                 log(f"{self.key}: " + ("stream ended" if started_ok else "can't record") + (f" - {err}" if err else ""))
                 break
-            now = time.time() - self.t0
+            if not self.rec_t0 and os.path.exists(self.rec) and os.path.getsize(self.rec) > 0:
+                self.rec_t0 = time.time()
+            now = self.rec_pos()
+            self.set(recorded=round(now))
             if self.manual.is_set():
                 self.manual.clear()
-                if now < 15:
-                    log(f"{self.key}: too early - wait until 15 s is recorded")
-                else:
-                    log(f"✂️  {self.key}: manual clip")
-                    self._fire(now - CLIP_LEN, "manual", 0)
+                with self.lock:
+                    reqs, self.requests = self.requests, []
+                for r in reqs:
+                    self._handle(r, now)
+            if time.time() < next_tick:          # manual action woke us early: keep 10 s chat windows exact
                 continue
+            next_tick += WINDOW
             with self.lock:
                 n, self.counter[0] = self.counter[0], 0
             avg = sum(hist) / len(hist) if hist else 0
-            spike = len(hist) >= 6 and n >= MIN_MSGS and n > avg * SPIKE_X
+            x, min_msgs = SENSITIVITY.get(self.view["sensitivity"], SENSITIVITY["medium"])
+            spike = len(hist) >= 6 and n >= min_msgs and n > avg * x
             print(f"[{datetime.now():%H:%M:%S}] {self.key:<18} chat {n:4d}/10s  avg {avg:6.1f}"
                   + ("  🔥 SPIKE" if spike else ""), flush=True)
             with STATE_LOCK:
                 self.view["buckets"] = (self.view["buckets"] + [
                     {"t": time.time(), "n": n, "avg": round(avg, 1), "spike": spike}])[-360:]
             hist.append(n)
-            if spike and now - last_clip > COOLDOWN:
+            if spike and self.view["auto"] and now - last_clip > CLIP_CFG["cooldown"] and now > 15:
                 last_clip = now
-                log(f"🔥 {self.key}: spike {n} msgs (avg {avg:.0f})")
-                threading.Timer(max(0, CLIP_LEN - PRE), self._fire,
-                                args=(now - WINDOW - PRE, "spike", n)).start()
+                length, lead = CLIP_CFG["length"], min(CLIP_CFG["lead"], CLIP_CFG["length"] - 5)
+                log(f"🔥 {self.key}: spike {n} msgs (avg {avg:.0f}) -> {length}s clip")
+                threading.Timer(max(0, length - lead), self._fire,
+                                args=(now - WINDOW - lead, "spike", n, length)).start()
+
+    def _handle(self, r, now):
+        if "seconds" in r:
+            secs = max(5, min(300, int(r["seconds"])))
+            if now < 8:
+                log(f"{self.key}: too early - nothing recorded yet")
+                return
+            secs = min(secs, int(now))
+            log(f"✂️  {self.key}: clip of the last {secs}s")
+            self._fire(now - secs, "manual", 0, secs)
+        elif r.get("mark") == "start":
+            self.set(mark=round(now, 1), mark_at=time.time())
+            log(f"⏺  {self.key}: clip started")
+        elif r.get("mark") == "end" and self.view.get("mark") is not None:
+            start = max(0.0, self.view["mark"] - 1.5)
+            length = min(300.0, now - start + 1.0)
+            self.set(mark=None, mark_at=None)
+            if length < 3:
+                return
+            log(f"⏹  {self.key}: clip from your marks ({length:.0f}s)")
+            self._fire(start, "manual", 0, length)
+        elif r.get("mark") == "cancel":
+            self.set(mark=None, mark_at=None)
 
 
 def add_channel(raw):
@@ -406,7 +451,7 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
     try:
         start = max(0.0, float(start))
         # 1) frame-accurate cut (re-encode, fast) so word timings line up exactly
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.3f}", "-i", src,
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "fatal", "-ss", f"{start:.3f}", "-i", src,
                         "-t", f"{length:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
                         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "16",
                         "-c:a", "aac", "-b:a", "192k", raw], check=True)
@@ -816,6 +861,36 @@ def _install_fail(msg):
     log(msg)
 
 
+def test_ai():
+    """Real calls to Groq: speech-to-text + the title/score model. Tells the user plainly what works."""
+    out = {"stt": "", "llm": "", "ok": False}
+    if not ai.has_key():
+        out["llm"] = out["stt"] = "No Groq key saved"
+        return out
+    tmp = os.path.join(CTX["out"], ".aitest.mp3")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=2",
+                        "-ac", "1", "-ar", "16000", tmp], check=True, timeout=30)
+        ai._curl([f"{ai.API}/audio/transcriptions", "-F", f"file=@{tmp}", "-F", f"model={ai.STT_MODEL}",
+                  "-F", "response_format=verbose_json", "-F", "timestamp_granularities[]=word"], tries=2)
+        out["stt"] = "ok"
+    except Exception as e:
+        out["stt"] = str(e)[:200]
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    try:
+        m = ai.score_clip("no way he just stole the police truck and drove it off the pier, chat is going insane",
+                          "test: GTA 6 livestream")
+        out["llm"] = "ok" if m.get("title") else "the model answered but gave no title"
+        out["sample"] = m
+    except Exception as e:
+        out["llm"] = str(e)[:200]
+    out["ok"] = out["stt"] == "ok" and out["llm"] == "ok"
+    log("AI test: " + ("everything works" if out["ok"] else f"speech={out['stt']} · titles={out['llm']}"))
+    return out
+
+
 def install_pkg(pkg):
     """Install Python parts into autoclip's own private environment (.venv in the project).
     Homebrew's Python refuses direct installs ("externally managed"), a private venv always works.
@@ -1076,9 +1151,34 @@ def make_handler(out_dir):
             if path == "/api/clip":
                 ch = CHANNELS.get(str(body.get("name", "")))
                 if not ch or ch.stop.is_set():
-                    return self._send(400, {"error": "channel not running"})
-                ch.manual.set()
+                    return self._send(400, {"error": "This stream isn't recording"})
+                if body.get("mark") in ("start", "end", "cancel"):
+                    ch.request(mark=body["mark"])
+                else:
+                    ch.request(seconds=body.get("seconds", 30))
                 return self._send(200, {"ok": True})
+            if path == "/api/channel/settings":
+                ch = CHANNELS.get(str(body.get("name", "")))
+                if not ch:
+                    return self._send(400, {"error": "unknown stream"})
+                if "auto" in body:
+                    ch.set(auto=bool(body["auto"]))
+                if body.get("sensitivity") in SENSITIVITY:
+                    ch.set(sensitivity=body["sensitivity"])
+                return self._send(200, {"ok": True})
+            if path == "/api/clip_settings":
+                for k, lo, hi in (("length", 10, 180), ("lead", 0, 120), ("cooldown", 10, 900)):
+                    if k in body:
+                        CLIP_CFG[k] = max(lo, min(hi, int(body[k])))
+                STATE["clip_cfg"] = dict(CLIP_CFG)
+                try:
+                    with open(os.path.join(CTX["out"], ".clip_settings.json"), "w") as f:
+                        json.dump(CLIP_CFG, f)
+                except OSError:
+                    pass
+                return self._send(200, dict(CLIP_CFG))
+            if path == "/api/test_ai":
+                return self._send(200, test_ai())
             if path == "/api/start":
                 kind, ident, err = start_any(body.get("input"), body.get("count", 5),
                                              body.get("min_len", 20), body.get("max_len", 60))
@@ -1180,18 +1280,69 @@ def load_existing(out_dir):
 
 # ---------------------------------------------------------------- zero-setup bootstrap
 
+GOOD_PY = ((3, 10), (3, 14))     # versions the video/AI libraries fully support (3.15 is too new)
+
+
+def _py_version(exe):
+    try:
+        r = subprocess.run([exe, "-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
+                           capture_output=True, text=True, timeout=20)
+        major, minor = map(int, r.stdout.split())
+        return (major, minor)
+    except Exception:
+        return None
+
+
+def _good(v):
+    return v is not None and GOOD_PY[0] <= v <= GOOD_PY[1]
+
+
+def pick_python():
+    """A stable Python for the private environment; installs one with Homebrew if needed."""
+    if _good(sys.version_info[:2]) and not in_venv():
+        return sys.executable
+    names = ["python3.13", "python3.12", "python3.11", "python3.14"]
+    dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/opt/python@{v}/bin", "/usr/local/opt/python@{v}/bin"]
+    cands = [shutil.which(n) for n in names]
+    for n in names:
+        v = n.replace("python", "")
+        cands += [os.path.join(d.format(v=v), n) for d in dirs]
+    for c in cands:
+        if c and os.path.exists(c) and _good(_py_version(c)):
+            return c
+    brew = shutil.which("brew") or next((b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+                                         if os.path.exists(b)), None)
+    if brew:
+        print("  Your Python is very new and some video parts don't support it yet.")
+        print("  Installing a stable Python 3.13 with Homebrew (one time, a minute or two)...", flush=True)
+        subprocess.run([brew, "install", "python@3.13"])
+        for c in ("/opt/homebrew/opt/python@3.13/bin/python3.13", "/usr/local/opt/python@3.13/bin/python3.13"):
+            if os.path.exists(c) and _good(_py_version(c)):
+                return c
+    return None
+
+
 def bootstrap():
-    """Everything installs itself: a private Python environment (.venv) with all parts,
-    and ffmpeg via Homebrew if it's missing. First run takes about a minute, later runs are instant."""
+    """Everything installs itself: a private Python environment (.venv) on a stable Python with all
+    parts, and ffmpeg via Homebrew if it's missing. First run takes a minute or two; later runs are instant."""
     if os.environ.get("AUTOCLIP_NO_VENV"):
         return
-    if not in_venv():
-        if not os.path.exists(VENV_PY):
+    venv_ok = os.path.exists(VENV_PY) and _good(_py_version(VENV_PY))
+    if not venv_ok:
+        base = pick_python()
+        if not base:
+            print("  ! Couldn't find a stable Python (3.10-3.14). Install one: brew install python@3.13", flush=True)
+            return
+        if os.path.exists(VENV):
+            print("  Rebuilding autoclip's environment on a stable Python (one time)...", flush=True)
+            shutil.rmtree(VENV, ignore_errors=True)
+        else:
             print("\n  First run: setting autoclip up for you (one time, about a minute)...\n", flush=True)
-            r = subprocess.run([sys.executable, "-m", "venv", VENV], capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"  Couldn't create the environment ({_pip_error(r)}). Continuing without it.", flush=True)
-                return
+        r = subprocess.run([base, "-m", "venv", VENV], capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"  Couldn't create the environment ({_pip_error(r)}).", flush=True)
+            return
+    if not in_venv() or not venv_ok:
         os.execv(VENV_PY, [VENV_PY, os.path.abspath(__file__), *sys.argv[1:]])
     # inside the private environment: its tools (streamlink, yt-dlp) come first on PATH
     os.environ["PATH"] = os.path.dirname(VENV_PY) + os.pathsep + os.environ.get("PATH", "")
@@ -1245,6 +1396,12 @@ def main():
     except (OSError, ValueError):
         STATE["caption_style"] = dict(DEFAULT_STYLE)
     STATE["fonts"] = list(FONT_FILES)
+    try:
+        with open(os.path.join(a.out, ".clip_settings.json")) as f:
+            CLIP_CFG.update({k: int(v) for k, v in json.load(f).items() if k in CLIP_CFG})
+    except (OSError, ValueError):
+        pass
+    STATE["clip_cfg"] = dict(CLIP_CFG)
     STATE["presets"] = PRESETS
     STATE.update(settings={"window": WINDOW, "spike_x": SPIKE_X, "min_msgs": MIN_MSGS,
                            "clip_len": CLIP_LEN, "cooldown": COOLDOWN})
