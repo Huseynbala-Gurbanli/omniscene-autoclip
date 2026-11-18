@@ -113,11 +113,34 @@ class Channel:
         self.chat_proc = None
         self.view = {"name": self.key, "label": slug, "platform": platform, "url": url,
                      "started": self.t0, "recording": self.rec, "rec_bytes": 0, "status": "starting",
-                     "chat_connected": False, "chat_note": "", "buckets": []}
+                     "chat_connected": False, "chat_note": "", "buckets": [], "embed": self._embed()}
 
     @property
     def name(self):
         return self.key
+
+    def _embed(self, video_id=None):
+        """Official player URL for the live view in the dashboard (muted autoplay)."""
+        if self.platform == "twitch":
+            return (f"https://player.twitch.tv/?channel={self.slug}&parent=localhost&parent=127.0.0.1"
+                    "&muted=true&autoplay=true")
+        if self.platform == "kick":
+            return f"https://player.kick.com/{self.slug}?muted=true&autoplay=true"
+        vid = video_id or (self.slug if re.fullmatch(r"[\w-]{11}", self.slug) else None)
+        return f"https://www.youtube.com/embed/{vid}?autoplay=1&mute=1&playsinline=1" if vid else ""
+
+    def _resolve_youtube(self):
+        """@handle/live -> the current live video id, so the player can be embedded."""
+        if not shutil.which("yt-dlp"):
+            return
+        try:
+            r = subprocess.run(["yt-dlp", "--no-warnings", "--skip-download", "--print", "id", self.url],
+                               capture_output=True, text=True, timeout=40)
+            vid = (r.stdout.strip().splitlines() or [""])[-1]
+            if re.fullmatch(r"[\w-]{11}", vid):
+                self.set(embed=self._embed(vid))
+        except Exception:
+            pass
 
     def set(self, **kw):
         with STATE_LOCK:
@@ -125,6 +148,8 @@ class Channel:
 
     def start(self):
         STATE["channels"][self.key] = self.view
+        if self.platform == "youtube" and not self.view["embed"]:
+            threading.Thread(target=self._resolve_youtube, daemon=True).start()
         threading.Thread(target=self._chat, daemon=True).start()
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -710,7 +735,9 @@ def refresh_setup():
           "websocket": has_module("websocket"), "curl_cffi": has_module("curl_cffi"),
           "yt_dlp": bool(shutil.which("yt-dlp")), "streamlink": bool(shutil.which("streamlink")),
           "ffmpeg": bool(shutil.which("ffmpeg")), "python": sys.executable,
-          "installing": STATE.get("setup", {}).get("installing", "")}
+          "installing": STATE.get("setup", {}).get("installing", ""),
+          "restarting": STATE.get("setup", {}).get("restarting", False), "venv": in_venv(),
+          "error": STATE.get("setup", {}).get("error", "")}
     with STATE_LOCK:
         STATE["setup"] = st
         STATE["captions"] = captions_ready()
@@ -743,23 +770,74 @@ def set_groq_key(key):
     return None
 
 
+VENV = os.path.join(HERE, ".venv")
+VENV_PY = os.path.join(VENV, "bin", "python")
+
+
+def in_venv():
+    return os.path.realpath(sys.prefix) == os.path.realpath(VENV)
+
+
+def _pip_error(r):
+    lines = [l for l in (r.stderr or r.stdout or "").strip().splitlines() if l.strip()]
+    return lines[-1][:200] if lines else f"exit code {r.returncode}"
+
+
+def _install_fail(msg):
+    STATE["setup"]["error"] = msg
+    log(msg)
+
+
 def install_pkg(pkg):
-    """pip install into the SAME Python that runs autoclip (avoids pip3/python3 mismatch)."""
-    if pkg not in PIP_PKGS:
+    """Install Python parts into autoclip's own private environment (.venv in the project).
+    Homebrew's Python refuses direct installs ("externally managed"), a private venv always works.
+    After installing, autoclip restarts itself inside that environment."""
+    if pkg not in PIP_PKGS or STATE["setup"].get("installing"):
         return
     STATE["setup"]["installing"] = pkg
+    STATE["setup"]["error"] = ""
     log(f"installing {pkg} ...")
-    ok = False
-    for extra in ([], ["--user"], ["--user", "--break-system-packages"]):
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *extra, pkg],
-                           capture_output=True, text=True)
-        if r.returncode == 0:
-            ok = True
-            break
-    STATE["setup"]["installing"] = ""
-    refresh_setup()
-    log(f"{pkg} installed" if ok and has_module(PIP_PKGS[pkg]) else
-        f"couldn't install {pkg}: run  {sys.executable} -m pip install {pkg}")
+    try:
+        if in_venv():
+            r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", pkg], capture_output=True, text=True)
+            if r.returncode != 0:
+                _install_fail(f"couldn't install {pkg}: {_pip_error(r)}")
+            else:
+                log(f"✓ {pkg} installed")
+            return
+        if not os.path.exists(VENV_PY):
+            log("creating autoclip's private Python environment (one time) ...")
+            r = subprocess.run([sys.executable, "-m", "venv", VENV], capture_output=True, text=True)
+            if r.returncode != 0:
+                _install_fail(f"couldn't create the environment: {_pip_error(r)}")
+                return
+        # bring along everything that already works + pillow (captions) + what was asked for
+        want = {"pillow", pkg} | {p for p, m in PIP_PKGS.items() if has_module(m)}
+        r = subprocess.run([VENV_PY, "-m", "pip", "install", "-q", *sorted(want)], capture_output=True, text=True)
+        if r.returncode != 0:
+            _install_fail(f"couldn't install {pkg}: {_pip_error(r)}")
+            return
+        log(f"✓ installed {', '.join(sorted(want))} - restarting autoclip to use them ...")
+        STATE["setup"]["restarting"] = True
+        threading.Timer(1.5, restart_in_venv).start()
+    finally:
+        STATE["setup"]["installing"] = ""
+        refresh_setup()
+
+
+def restart_in_venv():
+    a = CTX["args"]
+    urls = [ch.url for ch in CHANNELS.values() if not ch.stop.is_set()]
+    for ch in list(CHANNELS.values()):
+        ch.stop.set()
+        for p in (ch.proc, ch.chat_proc):
+            if p and p.poll() is None:
+                p.terminate()
+    argv = [VENV_PY, os.path.abspath(__file__), *urls, "--out", a.out, "--port", str(a.port), "--no-browser"]
+    if a.no_captions:
+        argv.append("--no-captions")
+    time.sleep(0.5)
+    os.execv(VENV_PY, argv)
 
 
 # ---------------------------------------------------------------- long video -> best clips
@@ -1082,6 +1160,9 @@ def main():
     p.add_argument("--port", type=int, default=8787)
     p.add_argument("--no-browser", action="store_true")
     a = p.parse_args()
+    if not in_venv() and os.path.exists(VENV_PY) and not os.environ.get("AUTOCLIP_NO_VENV"):
+        os.execv(VENV_PY, [VENV_PY, os.path.abspath(__file__), *sys.argv[1:]])   # use the private env
+    CTX["args"] = a
 
     os.makedirs(a.out, exist_ok=True)
     load_existing(a.out)
@@ -1092,7 +1173,7 @@ def main():
     if not setup["groq"]:
         log("No Groq key yet - add it in the dashboard (Settings) to turn on captions + AI titles")
     if not setup["pillow"]:
-        log(f"Pillow missing - click Fix in Settings, or run: {sys.executable} -m pip install pillow")
+        log("Pillow (caption engine) missing - click 'Install it now' in the dashboard")
     try:
         with open(os.path.join(a.out, ".caption_style.json")) as f:
             STATE["caption_style"] = clean_style(json.load(f))

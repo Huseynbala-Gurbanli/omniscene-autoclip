@@ -72,7 +72,14 @@
   .h2 .right{margin-left:auto}
 
   /* live cards */
-  .live{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .live{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:16px}
+  .player{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#000;border:1px solid var(--line)}
+  .player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .player .ph{position:absolute;inset:0;display:grid;place-content:center;gap:8px;text-align:center;color:var(--muted);font-size:14px;padding:12px}
+  .player .ph button{color:var(--text);text-decoration:underline}
+  .lc .top a{margin-left:auto;font-size:13px;color:var(--muted);text-decoration:none;white-space:nowrap}
+  .lc .top a:hover{color:var(--text)}
+  .lc .acts .vid{flex:none}
   .lc{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;display:grid;gap:12px}
   .lc .top{display:flex;align-items:center;gap:10px;min-width:0}
   .lc .name{font:700 19px var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -226,6 +233,7 @@
     <h3>One more step for captions</h3>
     <p>The caption engine (Pillow) isn't installed for this Python yet.</p>
     <div class="row"><button class="btn solid" data-fix="pillow" id="fixPil">Install it now</button></div>
+    <div class="err hidden" id="pilErr"></div>
   </section>
 
   <section class="block hidden" id="liveBlock">
@@ -323,7 +331,10 @@ async function api(path, body){
 }
 async function poll(){
   try { S = await (await fetch("/api/state")).json(); $("offline").classList.add("hidden"); render(); }
-  catch(e){ $("offline").classList.remove("hidden"); }
+  catch(e){ const r = S && S.setup && S.setup.restarting;
+    $("offline").textContent = r ? "Restarting autoclip with the new parts… this page reconnects by itself." : "autoclip stopped running. Start it again in Terminal: python3 autoclip.py";
+    $("offline").style.background = r ? "var(--warn)" : ""; $("offline").style.color = r ? "var(--bg)" : "";
+    $("offline").classList.remove("hidden"); }
 }
 
 /* ---------- setup ---------- */
@@ -334,7 +345,9 @@ function renderSetup(){
   $("pillTxt").textContent = ready ? "Captions on" : !st.groq ? "Captions off · add key" : "Captions off · 1 step left";
   $("setupKey").classList.toggle("hidden", !!st.groq);
   $("setupPil").classList.toggle("hidden", !st.groq || !!st.pillow);
-  $("fixPil").textContent = st.installing === "pillow" ? "Installing…" : "Install it now";
+  $("pilErr").textContent = st.error ? st.error + " — copy this message to Claude if it keeps failing." : "";
+  $("pilErr").classList.toggle("hidden", !st.error);
+  $("fixPil").textContent = st.restarting ? "Restarting…" : st.installing === "pillow" ? "Installing… (about a minute)" : "Install it now";
   const items = [
     ["Groq key (captions + AI titles)", st.groq, st.groq ? "saved" : "missing", null],
     ["Caption engine (Pillow)", st.pillow, st.pillow ? "installed" : "missing", "pillow"],
@@ -351,7 +364,7 @@ function renderSetup(){
 document.addEventListener("click", async e => {
   const b = e.target.closest("[data-fix]"); if (!b) return;
   b.textContent = "Installing…"; await api("/api/setup/install", {pkg: b.dataset.fix}).catch(() => {});
-  toast("Installing… this takes a minute");
+  toast("Installing… autoclip restarts by itself when it's done");
 });
 async function saveKey(input, errEl){
   const key = input.value.trim(); if (!key) return;
@@ -396,10 +409,13 @@ function renderLive(){
     let el = [...box.children].find(x => x.dataset.k === c.name);
     if (!el){
       el = document.createElement("div"); el.className = "lc"; el.dataset.k = c.name;
-      el.innerHTML = `<div class="top"><span class="pf ${c.platform}">${PF[c.platform] || ""}</span><span class="name">${esc(c.label || c.name)}</span></div>
+      el.innerHTML = `<div class="top"><span class="pf ${c.platform}">${PF[c.platform] || ""}</span><span class="name">${esc(c.label || c.name)}</span>
+          <a href="${esc(c.url)}" target="_blank" rel="noopener">Open ↗</a></div>
+        <div class="player"><div class="ph">Loading the live video…</div></div>
         <div class="status"><span class="dot"></span><span class="st"></span></div>
         <canvas aria-hidden="true"></canvas>
-        <div class="acts"><button class="btn solid sm" data-act="clip">✂ Clip now</button><button class="btn sm" data-act="stop">Stop</button></div>`;
+        <div class="acts"><button class="btn solid sm" data-act="clip">✂ Clip now</button><button class="btn sm vid" data-act="vid">Hide video</button><button class="btn sm" data-act="stop">Stop</button></div>`;
+      el.querySelector('[data-act="vid"]').onclick = e => { el._hide = !el._hide; e.target.textContent = el._hide ? "Show video" : "Hide video"; el._src = null; renderPlayer(el, c.name); };
       el.querySelector('[data-act="clip"]').onclick = () => api("/api/clip", {name: c.name}).then(() => toast("Clipping the last 30 seconds…")).catch(err => toast(err.message));
       el.querySelector('[data-act="stop"]').onclick = () => api("/api/channels/remove", {name: c.name}).then(() => { toast("Stopped " + (c.label || c.name)); poll(); });
       box.appendChild(el);
@@ -409,7 +425,20 @@ function renderLive(){
     el.querySelector(".dot").className = "dot " + cls;
     el.querySelector(".st").textContent = txt + (n ? ` · ${n} clip${n > 1 ? "s" : ""}` : "");
     spark(el.querySelector("canvas"), c.buckets);
+    renderPlayer(el, c.name);
   });
+}
+function renderPlayer(el, key){
+  const c = (S.channels || {})[key]; if (!c) return;
+  const box = el.querySelector(".player");
+  box.classList.toggle("hidden", !!el._hide);
+  if (el._hide){ if (el._src){ box.innerHTML = ""; el._src = null; } return; }
+  const src = (c.status === "offline" || c.status === "ended") ? "" : c.embed;
+  if (src === el._src) return;
+  el._src = src;
+  if (src) box.innerHTML = `<iframe src="${esc(src)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="${esc(c.label || key)} live"></iframe>`;
+  else box.innerHTML = `<div class="ph">${c.status === "offline" ? "Not live right now" : c.status === "ended" ? "Stream ended" :
+    c.platform === "youtube" ? "Finding the live video…" : "Loading the live video…"}<a href="${esc(c.url)}" target="_blank" rel="noopener" style="color:var(--text)">Open on ${PF[c.platform] ? PF[c.platform][0] + PF[c.platform].slice(1).toLowerCase() : "the site"} ↗</a></div>`;
 }
 function spark(cv, b){
   const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
