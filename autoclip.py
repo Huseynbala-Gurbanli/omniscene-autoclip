@@ -483,7 +483,11 @@ def make_clip(src, start, out_dir, name, captions, reason="spike", peak=0, chann
         # 4) layout
         set_clip(name, status="rendering", **meta)
         sw, sh = layout.probe_size(raw)
-        face = layout.detect_facecam(raw) if st["layout"] == "split" else None
+        try:
+            face = layout.detect_facecam(raw) if st["layout"] == "split" else None
+        except Exception as e:
+            log(f"face detection unavailable ({str(e)[:80]}) -> full video layout")
+            face = None
         if st["layout"] == "split" and not face:
             log(f"{name}: no facecam found -> blur layout")
         vf, used = layout.build_filter(st["layout"], sw, sh, face)
@@ -734,7 +738,12 @@ def caption_preview(style, channel=None):
                 tail = os.path.join(CTX["out"], f".facecheck_{ch.file_id}.ts")
                 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(0.0, ss - 14):.2f}",
                                 "-i", ch.rec, "-t", "20", "-c", "copy", tail], timeout=30)
-                _face_cache[ch.key] = hit = (time.time(), layout.detect_facecam(tail, samples=8))
+                try:
+                    found = layout.detect_facecam(tail, samples=8)
+                except Exception as e:                 # broken OpenCV/numpy -> no facecam, keep going
+                    log(f"face detection unavailable ({str(e)[:80]})")
+                    found = None
+                _face_cache[ch.key] = hit = (time.time(), found)
                 if os.path.exists(tail):
                     os.remove(tail)
             face = hit[1]
@@ -1131,8 +1140,9 @@ def make_handler(out_dir):
                     st = {}
                 try:
                     return self._send(200, caption_preview(st, q.get("ch", [""])[0]), "image/jpeg")
-                except ImportError:
-                    return self._send(500, {"error": "pip3 install pillow"})
+                except Exception as e:
+                    log(f"preview failed: {str(e)[:120]}")
+                    return self._send(500, {"error": str(e)[:200]})
             m = re.fullmatch(r"/clips/([\w.-]+\.mp4)", path)
             if m:
                 return self._video(os.path.join(out_dir, m.group(1)))

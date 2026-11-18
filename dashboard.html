@@ -275,7 +275,7 @@
 <aside class="drawer" id="drawer" aria-label="Settings">
   <button class="x" id="closeSet" aria-label="Close">×</button>
   <div class="pv">
-    <div class="phone"><img id="pv" alt="Preview of how clips will look"></div>
+    <div class="phone"><img id="pv" alt=""></div>
     <small id="pvLbl">How your clips will look</small>
   </div>
   <div class="set">
@@ -606,7 +606,9 @@ function sync(){
 function preview(){
   const img = $("pv"), ch = Object.keys(S.channels || {})[0] || "";
   img.classList.add("loading"); $("pvLbl").textContent = "Updating preview…";
-  img.onload = () => { img.classList.remove("loading"); $("pvLbl").textContent = ch ? "Preview using " + (S.channels[ch].label || ch) : "How your clips will look"; };
+  img.onload = () => { img.classList.remove("loading"); img.style.visibility = ""; $("pvLbl").textContent = ch ? "Preview using " + (S.channels[ch].label || ch) : "How your clips will look"; };
+  img.onerror = () => { img.classList.remove("loading"); img.style.visibility = "hidden";
+    $("pvLbl").textContent = "Preview isn't available yet. Restart autoclip (Ctrl+C, then python3 autoclip.py) to finish setup."; };
   img.src = "/api/caption_preview?s=" + encodeURIComponent(JSON.stringify(style)) + "&ch=" + encodeURIComponent(ch) + "&t=" + Date.now();
 }
 function openSet(){ if (!style) return; $("drawer").classList.add("open"); $("scrim").classList.add("open"); preview(); }
