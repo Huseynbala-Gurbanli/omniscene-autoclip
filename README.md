@@ -51,7 +51,8 @@ python3 autoclip.py ohnepixel kick.com/xqc                  # or start watching 
 6. **Settings** → caption style (Hype, Punchy, Karaoke, Bold, Pop, Box, Minimal — bounce/zoom
    animations, emoji, 11 fonts), layout, logo, auto-clip timing, setup check and **Test AI**.
 
-Clips + a `.json` sidecar (score, title, hashtags, transcript) are saved to `clips/`.
+Finished videos are saved to `clips/` (nothing else goes there). autoclip's own files — stream
+recordings, clip sources for the editor, titles/scores, settings — live in the hidden `clips/.autoclip/`.
 
 ## Options
 

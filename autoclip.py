@@ -109,7 +109,7 @@ class Channel:
         self.stop = threading.Event()
         self.manual = threading.Event()
         self.counter, self.lock = [0], threading.Lock()
-        self.rec = os.path.join(CTX["out"], f"{self.file_id}_{datetime.now():%Y%m%d_%H%M%S}.ts")
+        self.rec = os.path.join(data_dir("recordings"), f"{self.file_id}_{datetime.now():%Y%m%d_%H%M%S}.ts")
         self.t0 = time.time()
         self.proc = None
         self.chat_proc = None
@@ -264,7 +264,7 @@ class Channel:
             self.set(chat_note="manual only · brew install yt-dlp")
             log(f"{self.key}: yt-dlp missing -> brew install yt-dlp")
             return
-        base = os.path.join(CTX["out"], f".chat_{self.file_id}")
+        base = os.path.join(data_dir("tmp"), f"chat_{self.file_id}")
         out = base + ".live_chat.json"
         if os.path.exists(out):
             os.remove(out)
@@ -440,14 +440,54 @@ def set_clip(name, **kw):
 PAD = 8.0          # extra seconds kept on each side of a clip so the editor can extend it
 
 
-def src_dir(out_dir=None):
-    d = os.path.join(out_dir or CTX["out"], ".sources")
+def data_dir(*sub):
+    """autoclip's own files live in a hidden folder inside the clips folder, so the clips folder
+    shows only finished videos: .autoclip/{recordings,sources,meta,tmp} + settings."""
+    d = os.path.join(CTX["out"], ".autoclip", *sub)
     os.makedirs(d, exist_ok=True)
     return d
 
 
+def src_dir(out_dir=None):
+    return data_dir("sources")
+
+
 def sidecar_path(name):
-    return os.path.join(CTX["out"], name.replace(".mp4", ".json"))
+    return os.path.join(data_dir("meta"), name.replace(".mp4", ".json"))
+
+
+def migrate_layout(out):
+    """Move files from the old flat layout (everything in clips/) into .autoclip/."""
+    moves = 0
+    for f in os.listdir(out):
+        p = os.path.join(out, f)
+        if not os.path.isfile(p) and f != ".sources":
+            continue
+        dest = None
+        if f.endswith(".ts") or f.endswith(".ts.log"):
+            dest = data_dir("recordings")
+        elif re.fullmatch(r"[\w-]+\.json", f):
+            dest = data_dir("meta")
+        elif f in (".caption_style.json", ".clip_settings.json"):
+            dest = data_dir()
+        elif f.startswith((".preview_", ".facecheck_", ".aitest")) or ".rendering." in f or f.endswith("_raw.mp4"):
+            os.remove(p)
+            continue
+        elif f == ".sources":
+            for g in os.listdir(p):
+                shutil.move(os.path.join(p, g), os.path.join(data_dir("sources"), g))
+            shutil.rmtree(p, ignore_errors=True)
+            moves += 1
+            continue
+        if dest:
+            shutil.move(p, os.path.join(dest, f.lstrip(".") if f in (".caption_style.json", ".clip_settings.json") else f))
+            moves += 1
+    for f in os.listdir(out):            # leftover temp folders from older versions
+        if f.startswith((".caps_", ".vod_", ".story_", ".chat_")):
+            p = os.path.join(out, f)
+            shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
+    if moves:
+        log(f"tidied the clips folder: moved {moves} helper files into .autoclip/")
 
 
 def read_sidecar(name):
@@ -546,8 +586,8 @@ def render_clip(name):
     out = CTX["out"]
     source = os.path.join(src_dir(out), sc.get("source", name))
     final = os.path.join(out, name)
-    tmp = final.replace(".mp4", ".rendering.mp4")
-    capdir = os.path.join(out, f".caps_{name[:-4]}")
+    tmp = os.path.join(data_dir("tmp"), name.replace(".mp4", ".rendering.mp4"))
+    capdir = os.path.join(data_dir("tmp"), f"caps_{name[:-4]}")
     st = clean_style(sc.get("style"))
     a, b = sc["trim"]
     dur = max(1.0, b - a)
@@ -989,7 +1029,7 @@ def caption_preview(style, channel=None):
     frame, face = None, None
     ch = CHANNELS.get(channel or "")
     if ch and os.path.exists(ch.rec) and os.path.getsize(ch.rec) > 2_000_000:
-        jpg = os.path.join(CTX["out"], f".preview_{ch.file_id}.jpg")
+        jpg = os.path.join(data_dir("tmp"), f"preview_{ch.file_id}.jpg")
         d = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
                             "csv=p=0", ch.rec], capture_output=True, text=True, timeout=15).stdout.strip()
         ss = max(0.0, float(d or 0) - 6) if re.fullmatch(r"[\d.]+", d or "") else 3.0
@@ -1002,7 +1042,7 @@ def caption_preview(style, channel=None):
             hit = _face_cache.get(ch.key)
             if not hit or time.time() - hit[0] > 120:
                 # detect on a small copy of the last 20 s (seeking a huge growing .ts is slow)
-                tail = os.path.join(CTX["out"], f".facecheck_{ch.file_id}.ts")
+                tail = os.path.join(data_dir("tmp"), f"facecheck_{ch.file_id}.ts")
                 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(0.0, ss - 14):.2f}",
                                 "-i", ch.rec, "-t", "20", "-c", "copy", tail], timeout=30)
                 try:
@@ -1051,7 +1091,7 @@ def caption_preview(style, channel=None):
 def save_style(st):
     STATE["caption_style"] = st
     try:
-        with open(os.path.join(CTX["out"], ".caption_style.json"), "w") as f:
+        with open(os.path.join(data_dir(), "caption_style.json"), "w") as f:
             json.dump(st, f)
     except OSError:
         pass
@@ -1155,7 +1195,7 @@ def test_ai():
     if not ai.has_key():
         out["llm"] = out["stt"] = "No Groq key saved"
         return out
-    tmp = os.path.join(CTX["out"], ".aitest.mp3")
+    tmp = os.path.join(data_dir("tmp"), "aitest.mp3")
     try:
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=2",
                         "-ac", "1", "-ar", "16000", tmp], check=True, timeout=30)
@@ -1240,7 +1280,7 @@ def set_job(job, **kw):
 
 def run_vod(job):
     out = CTX["out"]
-    work = os.path.join(out, f".vod_{job['id']}")
+    work = os.path.join(data_dir("tmp"), f"vod_{job['id']}")
     os.makedirs(work, exist_ok=True)
     src, downloaded = job["url"], False
     try:
@@ -1362,14 +1402,15 @@ def start_any(raw, count=5, min_len=20, max_len=60):
 def recordings():
     """Gameplay the user already has: recorded streams (.ts) and downloaded videos, biggest first."""
     out = CTX["out"]
-    files = [os.path.join(out, f) for f in os.listdir(out) if f.endswith(".ts")]
+    rec = data_dir("recordings")
+    files = [os.path.join(rec, f) for f in os.listdir(rec) if f.endswith(".ts")]
     files = [f for f in files if os.path.getsize(f) > 20_000_000]
     return sorted(files, key=os.path.getsize, reverse=True)
 
 
 def run_story(job):
     out = CTX["out"]
-    work = os.path.join(out, f".story_{job['id']}")
+    work = os.path.join(data_dir("tmp"), f"story_{job['id']}")
     os.makedirs(work, exist_ok=True)
     try:
         if not ai.has_key():
@@ -1588,7 +1629,7 @@ def make_handler(out_dir):
                         CLIP_CFG[k] = max(lo, min(hi, int(body[k])))
                 STATE["clip_cfg"] = dict(CLIP_CFG)
                 try:
-                    with open(os.path.join(CTX["out"], ".clip_settings.json"), "w") as f:
+                    with open(os.path.join(data_dir(), "clip_settings.json"), "w") as f:
                         json.dump(CLIP_CFG, f)
                 except OSError:
                     pass
@@ -1652,8 +1693,7 @@ def make_handler(out_dir):
             if path == "/api/clips/delete":
                 n = str(body.get("name", ""))
                 if re.fullmatch(r"[\w-]+\.mp4", n):
-                    for fp in (os.path.join(out_dir, n), os.path.join(out_dir, n.replace(".mp4", ".json")),
-                               os.path.join(src_dir(out_dir), n)):
+                    for fp in (os.path.join(out_dir, n), sidecar_path(n), os.path.join(src_dir(), n)):
                         if os.path.exists(fp):
                             os.remove(fp)
                     with STATE_LOCK:
@@ -1730,7 +1770,7 @@ def load_existing(out_dir):
                     "created": os.path.getmtime(fp), "size": os.path.getsize(fp), "caption": "",
                     "channel": re.sub(r"^(kick|youtube)-", r"\1:", m.group(1)) if m else ""}
             try:
-                with open(fp.replace(".mp4", ".json")) as j:
+                with open(sidecar_path(f)) as j:
                     clip.update({k: v for k, v in json.load(j).items() if k not in ("words", "style", "face")})
                     clip["status"] = "ready"
             except (OSError, ValueError):
@@ -1841,6 +1881,9 @@ def main():
     CTX["args"] = a
 
     os.makedirs(a.out, exist_ok=True)
+    CTX["out"] = a.out
+    migrate_layout(a.out)
+    shutil.rmtree(os.path.join(a.out, ".autoclip", "tmp"), ignore_errors=True)   # leftovers from a crash
     load_existing(a.out)
     if not os.environ.get("GROQ_API_KEY") and load_config().get("groq_key"):
         os.environ["GROQ_API_KEY"] = load_config()["groq_key"]
@@ -1851,14 +1894,14 @@ def main():
     if not setup["pillow"]:
         log("Caption engine (Pillow) is missing - stop autoclip (Ctrl+C) and start it again to finish setup")
     try:
-        with open(os.path.join(a.out, ".caption_style.json")) as f:
+        with open(os.path.join(data_dir(), "caption_style.json")) as f:
             STATE["caption_style"] = clean_style(json.load(f))
     except (OSError, ValueError):
         STATE["caption_style"] = dict(DEFAULT_STYLE)
     STATE["fonts"] = list(FONT_FILES)
     STATE["has_logo"] = os.path.exists(LOGO)
     try:
-        with open(os.path.join(a.out, ".clip_settings.json")) as f:
+        with open(os.path.join(data_dir(), "clip_settings.json")) as f:
             CLIP_CFG.update({k: int(v) for k, v in json.load(f).items() if k in CLIP_CFG})
     except (OSError, ValueError):
         pass
